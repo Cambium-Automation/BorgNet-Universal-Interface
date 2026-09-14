@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 MAX_CONNECTIONS = 50
@@ -36,7 +36,9 @@ class SSH(BaseModel):
 
 class Connection(BaseModel):
     id: str = Field(default="", max_length=64, pattern=r"^[a-zA-Z0-9_-]*$")
-    kind: Literal["ollama", "openai", "anthropic", "gemini", "responses", "cohere"] = "ollama"
+    kind: Literal["ollama", "openai", "anthropic", "gemini", "responses", "cohere", "cli"] = "ollama"
+    cli_provider: Literal["codex", "grok", "gemini", "copilot"] = "codex"
+    cli_agent: str = Field(default="", max_length=100, pattern=r"^[a-zA-Z0-9_-]*$")
     url: str
     purpose: str = Field(default="", max_length=4000)
     model: str = Field(default="", max_length=300)
@@ -48,8 +50,19 @@ class Connection(BaseModel):
     timeout: int = Field(default=180, ge=10, le=1800)
     _url = field_validator("url")(endpoint)
 
+    @model_validator(mode="after")
+    def check_cli(self):
+        if self.kind == "cli" and (self.ssh or self.key_env):
+            raise ValueError("CLI connections use this computer's installed CLI and its existing sign-in")
+        if self.cli_agent and (self.kind != "cli" or self.cli_provider != "grok"):
+            raise ValueError("A named CLI agent is supported only for Grok")
+        return self
+
     @property
     def address(self):
+        if self.kind == "cli":
+            from .cli_text import NAMES
+            return f"{NAMES[self.cli_provider]} CLI" + (f" · {self.cli_agent}" if self.cli_agent else " · this computer")
         return self.ssh.address if self.ssh else self.url
 
 

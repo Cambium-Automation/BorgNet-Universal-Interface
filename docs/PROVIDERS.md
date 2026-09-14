@@ -27,3 +27,39 @@ This is text conversation support. Image/audio generation, embeddings, provider-
 - [Together compatibility](https://docs.together.ai/docs/inference/openai-compatibility)
 
 Protocol fixtures verify request paths, credentials, message history, public-text extraction, incomplete-response rejection, discovery pagination, and generation options. They do not establish live access to every cloud provider or model; users need their own credentials and account access.
+# Installed CLI connections
+
+Choose an installed CLI preset for Codex, Grok, Gemini, or GitHub Copilot. BorgNet
+uses the CLI's existing sign-in on the computer running BorgNet. The connection's
+checkbox includes or excludes it from a conversation. `default` uses the CLI's
+configured model; an explicit model ID is passed to that CLI. Discovery confirms
+installation, not authentication or quota. Open the same CLI in your terminal
+to sign in or resolve account errors. No API keys are copied out of CLI storage.
+
+These adapters return text answers and participate in BorgNet's existing
+collaboration. They do not grant model-driven shell or file-edit access. Requests
+run in temporary directories, have bounded output and timeouts, and expose only
+final answers. The installed CLIs remain user-trusted software and use their
+ordinary account configuration. Named local Grok agent profiles can be selected
+in the connection editor; these are distinct from cloud Grok Bots.
+
+Microsoft BitNet is a separate local OpenAI-compatible connection, with the
+installed service at `http://127.0.0.1:18081/v1`. This preset does not install or
+start a model; start the genuine BitNet runtime on that computer first.
+
+Install the official CLIs from their publishers. On another Mac, install and sign
+in there, or run BorgNet on the already configured computer. A CLI connection does
+not forward your local login to a remote Mac. Account limits still apply:
+[Copilot CLI](https://github.com/features/copilot/cli) includes Free-plan access
+with usage limits; BorgNet does not purchase or upgrade subscriptions.
+
+## Native background blur
+
+The native shell's Customize slider uses a 0–100 pixel WindowServer blur radius,
+separate from background tint/opacity. `WindowBackdropBlur` dynamically resolves
+`CGSMainConnectionID` and `CGSSetWindowBackgroundBlurRadius` from SkyLight. This is
+an undocumented macOS interface, isolated from the rest of the app and unsuitable
+for Mac App Store distribution. Missing symbols or a failed call disable the
+radius control; no opacity-based substitute is presented as adjustable blur.
+The native radius path uses a transparent web view without material crossfading.
+The browser version uses CSS backdrop-filter for backgrounds within its page.

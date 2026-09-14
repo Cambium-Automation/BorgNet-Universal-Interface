@@ -1,6 +1,31 @@
 import AppKit
 import WebKit
+import Darwin
 
+
+// Optional WindowServer API: isolates undocumented desktop blur support.
+// No screen capture, tint manipulation, or foreground filtering is involved.
+final class WindowBackdropBlur {
+    typealias Connection = @convention(c) () -> Int32
+    typealias SetRadius = @convention(c) (Int32, Int, Int32) -> Int32
+    private let library: UnsafeMutableRawPointer?
+    private let connection: Connection?
+    private let setRadius: SetRadius?
+    init() {
+        library = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY | RTLD_LOCAL)
+        if let library,
+           let get = dlsym(library, "CGSMainConnectionID"),
+           let set = dlsym(library, "CGSSetWindowBackgroundBlurRadius") {
+            connection = unsafeBitCast(get, to: Connection.self)
+            setRadius = unsafeBitCast(set, to: SetRadius.self)
+        } else { connection = nil; setRadius = nil }
+    }
+    func apply(window: NSWindow, radius: Double) -> Bool {
+        guard radius.isFinite, (0...100).contains(radius), window.windowNumber > 0,
+              let connection, let setRadius else { return false }
+        return setRadius(connection(), window.windowNumber, Int32(radius.rounded())) == 0
+    }
+}
 
 func nativeAppearanceScript(material: String, appearance: String? = nil) -> String {
     let state: [String: Any] = ["version": 1, "material": material, "tintPolicy": "system-theme-fixed"]
@@ -26,7 +51,7 @@ func focusFrostAlpha(isKeyWindow: Bool) -> CGFloat {
 }
 
 
-final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate {
+final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     private var window: NSWindow!
     private var webView: WKWebView!
     private var glassView: NSView?
@@ -35,6 +60,26 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var appearanceObservation: NSKeyValueObservation?
     private var darkAppearance: Bool?
     private var nativeMaterial = "visual-effect"
+    private var userBlur: Double?
+    private let radiusBlur = WindowBackdropBlur()
+    private var fallbackMaterial: NSVisualEffectView?
+    private let zoomSteps: [Double] = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
+    private var zoomLabel: NSMenuItem?
+
+    private func applyZoom(_ value: Double) {
+        let zoom = min(3, max(0.5, value))
+        webView.pageZoom = zoom
+        UserDefaults.standard.set(zoom, forKey: "BorgNetPageZoom")
+        zoomLabel?.title = "Zoom: \(Int((zoom * 100).rounded()))%"
+    }
+    @objc private func zoomIn(_ sender: Any?) {
+        applyZoom(zoomSteps.first(where: { $0 > webView.pageZoom + 0.001 }) ?? 3)
+    }
+    @objc private func zoomOut(_ sender: Any?) {
+        applyZoom(zoomSteps.last(where: { $0 < webView.pageZoom - 0.001 }) ?? 0.5)
+    }
+    @objc private func resetZoom(_ sender: Any?) { applyZoom(1) }
+
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureMenu()
@@ -67,8 +112,14 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             nativeMaterial = "liquid-glass"
         }
 
+        if radiusBlur.apply(window: window, radius: 0) {
+            nativeMaterial = "radius-blur"
+            // WindowServer does not blur fully transparent pixels.
+            window.backgroundColor = NSColor.black.withAlphaComponent(0.001)
+        }
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
+        configuration.userContentController.add(self, name: "borgnetBlur")
         configuration.userContentController.addUserScript(WKUserScript(
             source: nativeAppearanceScript(material: nativeMaterial),
             injectionTime: .atDocumentStart,
@@ -77,12 +128,16 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         webView = WKWebView(frame: container.bounds, configuration: configuration)
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
+        let savedZoom = UserDefaults.standard.double(forKey: "BorgNetPageZoom")
+        applyZoom(savedZoom > 0 ? savedZoom : 1)
         webView.setValue(false, forKey: "drawsBackground")
         webView.underPageBackgroundColor = .clear
         webView.wantsLayer = true
         webView.layer?.backgroundColor = NSColor.clear.cgColor
 
-        if #available(macOS 26.0, *), nativeMaterial == "liquid-glass" {
+        if nativeMaterial == "radius-blur" {
+            container.addSubview(webView)
+        } else if #available(macOS 26.0, *), nativeMaterial == "liquid-glass" {
             let glass = NSGlassEffectView(frame: container.bounds)
             glass.autoresizingMask = [.width, .height]
             glass.style = .clear
@@ -96,7 +151,7 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             let frost = NSVisualEffectView(frame: glassContent.bounds)
             frost.translatesAutoresizingMaskIntoConstraints = false
             frost.material = .hudWindow
-            frost.blendingMode = .withinWindow
+            frost.blendingMode = .behindWindow
             frost.state = .active
             frost.isEmphasized = false
             frost.alphaValue = focusFrostAlpha(isKeyWindow: false)
@@ -130,6 +185,7 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             material.blendingMode = .behindWindow
             material.state = .active
             material.alphaValue = 0.48
+            fallbackMaterial = material
             container.addSubview(material)
             container.addSubview(webView)
         }
@@ -168,13 +224,26 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
 
     private func synchronizeFocusFrost(animated: Bool) {
         guard let frost = focusFrostView else { return }
-        let alpha = focusFrostAlpha(isKeyWindow: window.isKeyWindow)
+        let alpha = userBlur.map { CGFloat($0 / 100) } ?? focusFrostAlpha(isKeyWindow: window.isKeyWindow)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.16 : 0
             frost.animator().alphaValue = alpha
             // A two-percent dark backing improves contrast without fading the text.
             focusShadeView?.animator().alphaValue = window.isKeyWindow ? 0.02 : 0
         }
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "borgnetBlur", message.frameInfo.isMainFrame,
+              let url = message.frameInfo.request.url,
+              ["127.0.0.1", "localhost", "::1"].contains(url.host ?? ""),
+              let body = message.body as? [String: Any] else { return }
+        let radius: Double
+        if body["reset"] as? Bool == true { radius = 0 }
+        else if let value = body["radius"] as? Double, value.isFinite, (0...100).contains(value) { radius = value }
+        else { return }
+        let applied = nativeMaterial == "radius-blur" && radiusBlur.apply(window: window, radius: radius)
+        webView.evaluateJavaScript("window.dispatchEvent(new CustomEvent('borgnet-blur-status',{detail:{available:\(applied),radius:\(radius)}}))")
     }
 
     private func synchronizeAppearance() {
@@ -248,6 +317,27 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         let reload = NSMenuItem(title: "Reload", action: #selector(reloadWorkspace(_:)), keyEquivalent: "r")
         reload.target = self
         viewMenu.addItem(reload)
+        viewMenu.addItem(.separator())
+        let scale = NSMenuItem(title: "Zoom: 100%", action: nil, keyEquivalent: "")
+        viewMenu.addItem(scale)
+        zoomLabel = scale
+        for (title, action, key) in [
+            ("Zoom In", #selector(zoomIn(_:)), "+"),
+            ("Zoom Out", #selector(zoomOut(_:)), "-"),
+            ("Actual Size", #selector(resetZoom(_:)), "0")
+        ] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.target = self
+            item.keyEquivalentModifierMask = [.command]
+            viewMenu.addItem(item)
+        }
+        // Also accept Command = without requiring Shift on US keyboards.
+        let equalZoom = NSMenuItem(title: "Zoom In", action: #selector(zoomIn(_:)), keyEquivalent: "=")
+        equalZoom.target = self
+        equalZoom.keyEquivalentModifierMask = [.command]
+        equalZoom.isHidden = true
+        equalZoom.allowsKeyEquivalentWhenHidden = true
+        viewMenu.addItem(equalZoom)
         viewItem.submenu = viewMenu
         mainMenu.addItem(viewItem)
         NSApp.mainMenu = mainMenu

@@ -4,6 +4,10 @@ const $$ = selector => [...document.querySelectorAll(selector)];
 const el = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
 let state = {connections: [], mcp_sources: [], context: [], history: []};
 const discovered = new Map(), health = new Map(), attached = new Set();
+let layoutPreferences={};
+try{layoutPreferences=JSON.parse(localStorage.getItem('borgnet-layout')||'{}')||{};}catch{}
+function saveLayout(){try{localStorage.setItem('borgnet-layout',JSON.stringify(layoutPreferences));}catch{}}
+const collapsedModels=new Set(Array.isArray(layoutPreferences.collapsed)?layoutPreferences.collapsed:[]);
 let conversation = '', busy = false, controller = null, fetchSource = '', mcpItems = [], pullConnection = '', toastTimer;
 if (window.borgnetNativeAppearance || new URLSearchParams(location.search).get('native') === '1') document.body.classList.add('native');
 window.addEventListener('borgnet-native-appearance', () => document.body.classList.add('native'));
@@ -37,26 +41,33 @@ function renderConnections() {
   $('#connections').replaceChildren();
   if (!state.connections.length) { const empty = el('p','caption','Nothing connected yet. Add a local endpoint, a remote computer, or a cloud API to get started.'); $('#connections').append(empty); }
   state.connections.forEach(c => {
-    const card=el('article','connection'), top=el('div','section-head'), check=document.createElement('input'); check.type='checkbox'; check.checked=c.enabled; check.setAttribute('aria-label',`Include ${c.address}`); check.disabled=busy;
-    check.addEventListener('change', action(async()=>{ await api('/connections', {...cleanConnection(c),enabled:check.checked}); await load(); }));
-    top.append(el('span','kind',c.kind === 'openai' ? 'OpenAI compatible' : c.kind),check);
-    card.append(top,el('div','address',c.address));
+    const card=el('article','connection'), top=el('div','section-head'), check=document.createElement('button');
+    check.type='button';check.className='connection-toggle';check.setAttribute('role','switch');check.setAttribute('aria-checked',String(c.enabled));check.setAttribute('aria-label',`Enable ${c.address}`);check.disabled=busy;
+    check.append(el('span','toggle-label',c.enabled?'On':'Off'),el('span','toggle-track'));
+    check.addEventListener('click', action(async()=>{check.disabled=true;try{await api('/connections', {...cleanConnection(c),enabled:!c.enabled});await load();}finally{check.disabled=busy;}}));
+    const modelName=c.model&&c.model!=='default'?c.model:c.kind==='cli'?`${c.cli_provider[0].toUpperCase()+c.cli_provider.slice(1)} · default`:c.kind;
+    const details=el('div','connection-details');details.id=`connection-details-${c.id}`;details.hidden=collapsedModels.has(c.id);
+    const expand=button('',()=>{details.hidden=!details.hidden;expand.setAttribute('aria-expanded',String(!details.hidden));if(details.hidden)collapsedModels.add(c.id);else collapsedModels.delete(c.id);layoutPreferences.collapsed=[...collapsedModels];saveLayout();},'connection-expand');
+    expand.setAttribute('aria-expanded',String(!details.hidden));expand.setAttribute('aria-controls',details.id);expand.setAttribute('aria-label',`Details for ${modelName}`);expand.title=modelName;
+    expand.append(el('span','connection-chevron','›'),el('span','connection-name',modelName));
+    top.append(expand,check);card.append(top,details);
+    details.append(el('span','kind',c.kind === 'openai' ? 'OpenAI compatible' : c.kind),el('div','address',c.address));
     const picker=el('select'); picker.setAttribute('aria-label',`Model for ${c.address}`); picker.disabled=busy;
     const models=[...new Set([...(discovered.get(c.id)||[]),...(c.model?[c.model]:[])])];
     picker.add(new Option(models.length ? 'Choose a model' : 'Discover or enter a model', ''));
     models.forEach(model=>picker.add(new Option(model,model))); picker.value=c.model;
-    picker.addEventListener('change',action(async()=>{await api('/connections',{...cleanConnection(c),model:picker.value,options:modelOptions(c,picker.value),model_options:modelProfiles(c)}); await load();})); card.append(picker);
-    if(c.purpose) card.append(el('p','purpose',c.purpose));
-    const h=health.get(c.id), footer=el('footer'); footer.append(el('span',`health${h?.error?' error':''}`,h?.text || 'Not checked'));
+    picker.addEventListener('change',action(async()=>{await api('/connections',{...cleanConnection(c),model:picker.value,options:modelOptions(c,picker.value),model_options:modelProfiles(c)}); await load();})); details.append(picker);
+    if(c.purpose) details.append(el('p','purpose',c.purpose));
+    const h=health.get(c.id), footer=el('footer'),needsKey=c.kind==='gemini'&&!c.has_key; footer.append(el('span',`health${h?.error||needsKey?' error':''}`,needsKey?'API key needed · add in Edit connection':h?.text || 'Not checked'));
     const controls=el('div'); const refresh=button('↻',()=>discover(c.id),'icon'); refresh.title='Discover models'; refresh.setAttribute('aria-label',`Discover models for ${c.address}`); controls.append(refresh);
     if(c.kind==='ollama'){const pull=button('↓',()=>{pullConnection=c.id; $('#pullForm').reset(); $('#pullTarget').textContent=c.address; $('#pullDialog').showModal();},'icon');pull.title='Download model';pull.setAttribute('aria-label',`Download model on ${c.address}`);controls.append(pull);}
-    const edit=button('⋯',()=>editConnection(c),'icon'); edit.title='Edit connection';edit.setAttribute('aria-label',`Edit ${c.address}`); controls.append(edit); footer.append(controls);card.append(footer);$('#connections').append(card);
+    const edit=button('⋯',()=>editConnection(c),'icon'); edit.title='Edit connection';edit.setAttribute('aria-label',`Edit ${c.address}`); controls.append(edit); footer.append(controls);details.append(footer);$('#connections').append(card);
   }); updateComposer();
 }
 async function discover(identity) {
   health.set(identity,{text:'Discovering…'});renderConnections();
   try { const result=await api(`/connections/${identity}/discover`,{});discovered.set(identity,result.models); health.set(identity,{text: result.models.length ? `${result.models.length} models · ${result.latency_ms} ms` : 'No models returned'});
-    const c=state.connections.find(c=>c.id===identity); if(c && !c.model && result.models.length){await api('/connections',{...cleanConnection(c),model:result.models[0]});await load();}
+    const c=state.connections.find(c=>c.id===identity); if(c?.kind==='cli')health.set(identity,{text:'CLI installed · sign-in checked when sending'}); if(c && !c.model && result.models.length){await api('/connections',{...cleanConnection(c),model:result.models[0]});await load();}
   } catch(error){health.set(identity,{text:error.message,error:true});toast(error.message);} renderConnections();
 }
 const providerPresets = [
@@ -71,7 +82,9 @@ const providerPresets = [
   ['Groq','openai','https://api.groq.com/openai/v1','GROQ_API_KEY'],
   ['OpenRouter','openai','https://openrouter.ai/api/v1','OPENROUTER_API_KEY'],
   ['DeepSeek','openai','https://api.deepseek.com','DEEPSEEK_API_KEY'],
-  ['Together AI','openai','https://api.together.xyz/v1','TOGETHER_API_KEY']
+  ['Together AI','openai','https://api.together.xyz/v1','TOGETHER_API_KEY'],
+  ['Microsoft BitNet · local','openai','http://127.0.0.1:18081/v1',''],
+  ...['codex','grok','gemini','copilot'].map(name=>[`${name} · installed CLI`,'cli','http://127.0.0.1','',name])
 ];
 providerPresets.forEach((p,i)=>$('#connectionForm').elements.preset.add(new Option(p[0],String(i))));
 $('#connectionForm').elements.preset.addEventListener('change',event=>{
@@ -81,7 +94,18 @@ $('#connectionForm').elements.preset.addEventListener('change',event=>{
   form.elements.kind.value=p[1];form.elements.url.value=p[2];form.elements.key_env.value=p[3];
   form.elements.model.value='';form.elements.api_key.value='';form.elements.options.value='{}';
   form.elements.use_ssh.checked=false;$('#sshFields').hidden=true;
+  form.elements.cli_provider.value=p[4]||'codex';form.elements.cli_agent.value='';
+  if(p[1]==='cli')form.elements.model.value='default';
+  updateConnectionFields();
 });
+function updateConnectionFields() {
+  const form=$('#connectionForm'),cli=form.elements.kind.value==='cli';
+  $('#cliFields').hidden=!cli;$('#apiFields').hidden=cli;$('#sshToggle').hidden=cli;
+  $('#cliAgentField').hidden=!cli||form.elements.cli_provider.value!=='grok';
+  form.elements.url.required=!cli;
+  if(cli){form.elements.use_ssh.checked=false;$('#sshFields').hidden=true;}
+}
+$('#connectionForm').elements.cli_provider.addEventListener('change',updateConnectionFields);
 function editConnection(c) {
   const form=$('#connectionForm');form.reset();$('#presetLabel').hidden=Boolean(c);$('#connectionTitle').textContent=c?'Edit connection':'Connect a provider';
   for(const name of ['id','kind','url','purpose','model','key_env']) form.elements[name].value=c?.[name] || (name==='kind'?'ollama':'');
@@ -89,17 +113,19 @@ function editConnection(c) {
   for(const [name,field] of [['ssh_host','host'],['ssh_user','user'],['ssh_port','port'],['remote_port','remote_port'],['identity_file','identity_file'],['remote_host','remote_host']]) if(c?.ssh) form.elements[name].value=c.ssh[field];
   $('#sshFields').hidden=!c?.ssh;$('#deleteConnection').hidden=!c;
   $('#keyHint').textContent=c?.has_key?'A key is configured. Leave blank to keep it, or enter a replacement. An environment variable takes precedence.':'Keys are stored separately with owner-only file permissions.';
-  $('#connectionDialog').showModal();
+  form.elements.cli_provider.value=c?.cli_provider||'codex';form.elements.cli_agent.value=c?.cli_agent||'';
+  updateConnectionFields();$('#connectionDialog').showModal();
 }
 $('#connectionForm').addEventListener('submit',action(async event=>{
   event.preventDefault();const form=event.currentTarget, values=Object.fromEntries(new FormData(form));
   const old=state.connections.find(c=>c.id===values.id);
-  const body={id:values.id,kind:values.kind,url:values.url,purpose:values.purpose,model:values.model,key_env:values.key_env,enabled:old?.enabled??true,model_options:old?.model_options||{},api_key:values.api_key||null,
+  const cli=values.kind==='cli';
+  const body={cli_provider:values.cli_provider,cli_agent:cli&&values.cli_provider==='grok'?values.cli_agent:'',id:values.id,kind:values.kind,url:cli?'http://127.0.0.1':values.url,purpose:values.purpose,model:values.model,key_env:cli?'':values.key_env,enabled:old?.enabled??true,model_options:old?.model_options||{},api_key:values.api_key||null,
     ssh:form.elements.use_ssh.checked?{host:values.ssh_host,user:values.ssh_user,port:Number(values.ssh_port),remote_port:Number(values.remote_port),identity_file:values.identity_file,remote_host:values.remote_host||'127.0.0.1'}:null,options:JSON.parse(values.options||'{}'),timeout:Number(values.timeout)};
   const result=await api('/connections',body);$('#connectionDialog').close();await load();await discover(result.id);
 }));
 $('#connectionForm').elements.use_ssh.addEventListener('change',event=>{$('#sshFields').hidden=!event.target.checked;});
-$('#connectionForm').elements.kind.addEventListener('change',event=>{const form=$('#connectionForm'); if(!form.elements.id.value){const defaults={ollama:'http://localhost:11434',openai:'https://api.openai.com/v1',anthropic:'https://api.anthropic.com/v1',gemini:'https://generativelanguage.googleapis.com/v1beta',responses:'https://api.openai.com/v1',cohere:'https://api.cohere.com'};form.elements.preset.value='';form.elements.key_env.value='';form.elements.api_key.value='';form.elements.options.value='{}';form.elements.url.value=defaults[event.target.value];}});
+$('#connectionForm').elements.kind.addEventListener('change',event=>{const form=$('#connectionForm'); if(!form.elements.id.value){const defaults={ollama:'http://localhost:11434',openai:'https://api.openai.com/v1',anthropic:'https://api.anthropic.com/v1',gemini:'https://generativelanguage.googleapis.com/v1beta',responses:'https://api.openai.com/v1',cohere:'https://api.cohere.com',cli:'http://127.0.0.1'};form.elements.preset.value='';form.elements.key_env.value='';form.elements.api_key.value='';form.elements.options.value='{}';form.elements.url.value=defaults[event.target.value];if(event.target.value==='cli')form.elements.model.value='default';}updateConnectionFields();});
 $('#deleteConnection').addEventListener('click',action(async()=>{await api(`/connections/${$('#connectionForm').elements.id.value}/delete`,{});$('#connectionDialog').close();await load();}));
 $('#pullForm').addEventListener('submit',action(async event=>{event.preventDefault();const model=new FormData(event.currentTarget).get('model');$('#pullDialog').close();health.set(pullConnection,{text:'Downloading…'});renderConnections();toast('Download started. Large models may take several minutes.');const id=pullConnection;try{await api(`/connections/${id}/pull`,{model});toast('Model downloaded.');await discover(id);}catch(error){health.set(id,{text:error.message,error:true});renderConnections();throw error;}}));
 function renderContext() {
@@ -146,3 +172,20 @@ $('#theme').addEventListener('change',action(async event=>{await api('/settings'
 load().catch(error=>toast(error.message));
 
 $('#synthesis').addEventListener('change',action(async event=>{state.synthesis=event.target.value;await api('/settings',{synthesis:state.synthesis});}));
+
+// Resize the connection column and message section without changing model settings.
+function installSectionResize(handle,axis,key,measure,limits,apply,defaultSize){
+  const sync=value=>{const [min,max]=limits();const size=Math.round(Math.max(min,Math.min(max,value)));apply(size);handle.setAttribute('aria-valuemin',String(min));handle.setAttribute('aria-valuemax',String(Math.round(max)));handle.setAttribute('aria-valuenow',String(size));return size;};
+  const initial=Number(layoutPreferences[key]);if(Number.isFinite(initial)&&initial>0)sync(initial);else sync(measure());
+  let drag=null;
+  handle.addEventListener('pointerdown',event=>{if(event.button!==0)return;event.preventDefault();handle.focus();drag={position:axis==='x'?event.clientX:event.clientY,size:measure()};handle.setPointerCapture(event.pointerId);});
+  handle.addEventListener('pointermove',event=>{if(!drag)return;const delta=(axis==='x'?event.clientX:event.clientY)-drag.position;sync(drag.size+(axis==='x'?delta:-delta));});
+  const finish=()=>{if(!drag)return;drag=null;layoutPreferences[key]=measure();saveLayout();};
+  handle.addEventListener('pointerup',finish);handle.addEventListener('pointercancel',finish);handle.addEventListener('lostpointercapture',finish);
+  handle.addEventListener('keydown',event=>{const keys=axis==='x'?['ArrowLeft','ArrowRight']:['ArrowDown','ArrowUp'];if(!keys.includes(event.key)&&!['Home','End'].includes(event.key))return;event.preventDefault();const [min,max]=limits();layoutPreferences[key]=sync(event.key==='Home'?min:event.key==='End'?max:measure()+(event.key===keys[0]?-20:20));saveLayout();});
+  handle.addEventListener('dblclick',()=>{layoutPreferences[key]=sync(defaultSize);saveLayout();});
+  window.addEventListener('resize',()=>sync(measure()));
+}
+const layoutNode=$('.layout'),sidebarNode=$('.sidebar'),composerNode=$('#composer');
+installSectionResize($('#sidebarResize'),'x','sidebarWidth',()=>sidebarNode.getBoundingClientRect().width,()=>[220,Math.max(220,Math.min(580,layoutNode.clientWidth-360))],size=>layoutNode.style.setProperty('--sidebar-width',`${size}px`),280);
+installSectionResize($('#composerResize'),'y','composerHeight',()=>composerNode.getBoundingClientRect().height,()=>[150,Math.max(150,Math.min(480,$('.workspace').clientHeight-220))],size=>composerNode.style.height=`${size}px`,180);

@@ -111,7 +111,7 @@ def create_app(root: Path, provider_transport=None):
             if "api_key" in data and data["api_key"] is not None:
                 store.save_secret(item.id, data["api_key"])
             store.write("config", config)
-            if previous and any(previous.get(k) != item.model_dump().get(k) for k in ('url', 'kind', 'ssh')):
+            if previous and any(previous.get(k) != item.model_dump().get(k) for k in ('url', 'kind', 'ssh', 'cli_provider', 'cli_agent')):
                 catalog = store.read('model-catalog', {})
                 catalog.pop(item.id, None)
                 store.write('model-catalog', catalog)

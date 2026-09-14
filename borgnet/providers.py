@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, quote
 import httpx
 from .config import Connection
+from .cli_text import CLIText, models as cli_models
 
 
 class Tunnels:
@@ -65,10 +66,13 @@ class Tunnels:
 class Providers:
     def __init__(self, store, tunnels, transport=None):
         self.store, self.tunnels, self.transport = store, tunnels, transport
+        self.cli = CLIText()
 
     async def request(self, item, method, path, payload=None, timeout=None):
         base = await self.tunnels.url(item)
         key = self.store.secret(item)
+        if item.kind == "gemini" and urlsplit(base).hostname == "generativelanguage.googleapis.com" and not key:
+            raise ValueError("Gemini API key is missing. Open Edit connection and add an AI Studio API key from a Free Tier project with billing disabled.")
         headers = {}
         if item.kind == "anthropic":
             headers["anthropic-version"] = "2023-06-01"
@@ -85,6 +89,16 @@ class Providers:
             except httpx.HTTPError:
                 raise ValueError("Endpoint unreachable or timed out; check its URL, service, and tunnel.") from None
             if response.is_error or response.is_redirect:
+                if item.kind == "gemini":
+                    messages = {
+                        400: "Gemini rejected the request. Check the API key, model ID, and request options.",
+                        401: "Gemini API key was rejected. Replace it in Edit connection.",
+                        403: "Gemini API access was denied. Check the key's project and API restrictions.",
+                        404: "Gemini model was not found. Discover models and select an available model ID.",
+                        429: "Gemini quota or rate limit reached. Wait for the free quota to reset; no paid fallback was used.",
+                    }
+                    if response.status_code in messages:
+                        raise ValueError(messages[response.status_code])
                 # Do not reflect upstream bodies: they can contain echoed credentials or private data.
                 raise ValueError(f"Provider returned HTTP {response.status_code}. Check authentication, model support, and service logs.")
             try:
@@ -93,6 +107,8 @@ class Providers:
                 raise ValueError("Provider returned an invalid JSON response") from None
 
     async def models(self, item):
+        if item.kind == "cli":
+            return cli_models(item)
         if item.kind == "cohere":
             names, token = set(), ""
             for _ in range(20):
@@ -117,6 +133,8 @@ class Providers:
     async def chat(self, item, messages, system="", response_schema=None):
         if not item.model:
             raise ValueError("Select a discovered model or enter a model ID first")
+        if item.kind == "cli":
+            return await self.cli.chat(item, messages, system, response_schema)
         if item.kind == "ollama":
             data = await self.request(item, "POST", "/api/chat", {"model": item.model, "stream": False,
                 **({"format": response_schema} if response_schema is not None else {}),
