@@ -28,3 +28,20 @@ dialog{border-radius:12px}
 .history-item small{color:var(--text);opacity:.75}
 .history-item:hover:not(:disabled){background:rgba(12,18,22,.36)}
 .result.synthesis,.result.synthesis>header,.result.synthesis>.answer{background:transparent}
+
+/* One live, expandable participant bar per prompt. */
+.conference{margin:12px 0;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.conference-bar{display:flex;align-items:center;gap:14px;padding:13px 16px;cursor:pointer;list-style:none;background:var(--surface)}
+.conference-bar::-webkit-details-marker{display:none}
+.conference-bar:before{content:'›';color:var(--muted);font-size:18px}
+.conference[open]>.conference-bar:before{content:'⌄'}
+.conference-label{font-size:10px;color:var(--muted);flex-shrink:0}
+.conference-models{display:flex;flex-wrap:wrap;gap:8px 18px;min-width:0}
+.model-status{display:inline-flex;align-items:baseline;gap:6px;max-width:100%;font-size:12px}
+.model-name{color:#eff5f3;overflow-wrap:anywhere;transition:color .2s}
+.model-working{font-size:10px;color:var(--muted)}
+.model-status[data-status=complete] .model-name{color:#80d9a8}
+.model-status[data-status=error] .model-name,.model-status[data-status=error] .model-working{color:var(--error)}
+.conference-body{padding:0 12px 4px;max-height:55vh;overflow:auto;border-top:1px solid var(--line)}
+.conference-body .result{margin:12px 0;background:transparent}
+@media(max-width:720px){.conference-bar{gap:9px;padding:11px}.conference-label{display:none}}
