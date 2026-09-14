@@ -113,3 +113,34 @@ def test_api_defaults_to_collaboration_and_preserves_final_in_history(tmp_path, 
         history = client.get('/api/state').json()['history']
         assert history[-1]['results'][-1]['decision']['selected_proposals'] == ['P2']
         assert len(fixture.calls) == 7
+
+
+def test_fifty_connections_dispatch_review_and_capacity_boundary(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from borgnet.server import create_app
+    app = create_app(tmp_path)
+    fixture = CouncilFixture()
+    monkeypatch.setattr(app.state.providers, 'chat', fixture.chat)
+    with TestClient(app) as client:
+        client.headers['X-BorgNet-Token'] = client.get('/api/state').json()['token']
+        ids = [f'c{i}' for i in range(50)]
+        for identity in ids:
+            assert client.post('/api/connections', json={'id':identity,'url':'http://localhost:1234','model':'fixture-chat'}).status_code == 200
+        # Editing at capacity is allowed; adding a 51st preserves both config and secrets.
+        assert client.post('/api/connections', json={'id':ids[0],'url':'http://localhost:1234','model':'fixture-chat','purpose':'Updated'}).status_code == 200
+        rejected = client.post('/api/connections', json={'id':'overflow','url':'http://localhost:1234','model':'fixture-chat','api_key':'fixture-overflow-secret'})
+        assert rejected.status_code == 400 and '50' in rejected.json()['error']
+        assert len(client.get('/api/state').json()['connections']) == 50
+        assert 'overflow' not in app.state.store.read('secrets', {})
+        assert client.post('/api/dispatch', json={'prompt':'Question','connections':ids+['overflow']}).status_code == 422
+        response = client.post('/api/dispatch', json={'prompt':'Choose the strongest answer','connections':ids})
+        assert response.status_code == 200
+        events = [json.loads(line) for line in response.text.splitlines()]
+        reviews = [e for e in events if e['type']=='result' and e['phase']=='review']
+        assert len(reviews) == 50
+        assert all(e['status']=='complete' and len(e['ballot']['ranking'])==49 for e in reviews)
+        final = next(e for e in events if e['type']=='result' and e['phase']=='final')
+        assert final['status']=='complete' and len(final['ranking'])==50
+        assert all(row['reviews']==49 for row in final['ranking'])
+        assert len(fixture.calls)==101
+        assert client.get('/api/state').json()['history'][-1]['results'][-1]['phase']=='final'

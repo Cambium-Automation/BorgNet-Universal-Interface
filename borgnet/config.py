@@ -9,6 +9,8 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, Field, field_validator
 
 
+MAX_CONNECTIONS = 50
+
 def endpoint(value: str) -> str:
     parts = urlsplit(value)
     if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:

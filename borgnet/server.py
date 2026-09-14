@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
-from .config import Connection, MCPSource, Store
+from .config import Connection, MCPSource, Store, MAX_CONNECTIONS
 from .providers import Providers, Tunnels
 from .mcp_bridge import inspect_source, fetch_context
 from .collaboration import collaborate
@@ -20,7 +20,7 @@ WEB = Path(__file__).parent / "web"
 
 class Dispatch(BaseModel):
     prompt: str = Field(min_length=1, max_length=50000)
-    connections: list[str] = Field(min_length=1, max_length=32)
+    connections: list[str] = Field(min_length=1, max_length=MAX_CONNECTIONS)
     contexts: list[str] = Field(default_factory=list, max_length=32)
     conversation: str = Field(default="", max_length=64)
     synthesize: str = Field(default="", max_length=64)
@@ -101,8 +101,8 @@ def create_app(root: Path, provider_transport=None):
         with store.lock:
             config = store.config()
             config["connections"] = [c for c in config["connections"] if c["id"] != item.id] + [item.model_dump()]
-            if len(config["connections"]) > 32:
-                raise ValueError("Up to 32 connections are supported")
+            if len(config["connections"]) > MAX_CONNECTIONS:
+                raise ValueError(f"Up to {MAX_CONNECTIONS} connections are supported")
             if "api_key" in data and data["api_key"] is not None:
                 store.save_secret(item.id, data["api_key"])
             store.write("config", config)
