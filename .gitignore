@@ -19,3 +19,5 @@ context.json
 *.key
 *.app/
 .DS_Store
+
+model-catalog.json

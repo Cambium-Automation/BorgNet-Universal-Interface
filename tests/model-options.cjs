@@ -1,0 +1,10 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync('borgnet/web/app.js','utf8');
+const fn=source.match(/^function modelOptions\(.*$/m)[0];
+const context=vm.createContext({});vm.runInContext(fn,context);
+const connection={kind:'ollama',model:'thinking-model',options:{think:'low',num_ctx:8192,num_predict:1200,temperature:0.4}};
+const switched=context.modelOptions(connection,'another-model');
+assert.equal(switched.think,undefined);assert.equal(switched.num_ctx,8192);assert.equal(switched.num_predict,1200);assert.equal(connection.options.think,'low');
+assert.equal(context.modelOptions(connection,'thinking-model').think,'low');
+assert.equal(context.modelOptions({...connection,kind:'openai'},'another-model').think,'low');
+console.log('Model switching drops stale Ollama thinking overrides and preserves general settings.');

@@ -246,3 +246,32 @@ def test_synthesis_preference_is_persistent(client):
     assert client.post('/api/settings',json={'synthesis':identity}).status_code==200
     assert client.get('/api/state').json()['synthesis']==identity
     assert client.post('/api/settings',json={'synthesis':'unknown'}).status_code==400
+
+
+def test_discovered_models_persist_and_invalidate_when_endpoint_changes(client,tmp_path):
+    identity=add(client)
+    client.post(f'/api/connections/{identity}/discover',json={}).raise_for_status()
+    assert client.get('/api/state').json()['model_catalog'][identity]==['fixture-chat']
+    # A new server reading the same private data keeps the discovered choices.
+    with TestClient(create_app(tmp_path,httpx.MockTransport(fixture_response))) as reopened:
+        assert reopened.get('/api/state').json()['model_catalog'][identity]==['fixture-chat']
+    add(client,id=identity,purpose='New role')
+    assert identity in client.get('/api/state').json()['model_catalog']
+    add(client,id=identity,url='http://localhost:11435')
+    assert identity not in client.get('/api/state').json()['model_catalog']
+    client.post(f'/api/connections/{identity}/discover',json={}).raise_for_status()
+    client.post(f'/api/connections/{identity}/delete',json={}).raise_for_status()
+    assert identity not in json.loads((tmp_path/'model-catalog.json').read_text())
+    assert (tmp_path/'model-catalog.json').stat().st_mode & 0o777 == 0o600
+
+
+async def test_provider_redirect_does_not_forward_credentials(tmp_path):
+    store=Store(tmp_path);store.save_secret('fixture','fixture-secret-value')
+    calls=[]
+    def redirect(request):
+        calls.append(str(request.url))
+        return httpx.Response(302,headers={'Location':'https://untrusted.example/models'})
+    providers=Providers(store,Tunnels(),httpx.MockTransport(redirect))
+    with pytest.raises(ValueError,match='HTTP 302'):
+        await providers.models(Connection(id='fixture',kind='openai',url='https://provider.example/v1'))
+    assert calls==['https://provider.example/v1/models']

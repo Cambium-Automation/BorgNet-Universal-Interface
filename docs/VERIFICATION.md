@@ -17,10 +17,12 @@ Evidence limits: no real cloud credentials, real model downloads, live remote SS
 
 ## Collaborative decisions and native icon
 
-31 automated tests pass, including question/implementation selection, malformed/self/duplicate/missing ballots, partial participation, quorum refusal, and final-editor fallback. These are controlled fixtures, not a benchmark of model answer quality. The native icon is generated from `native/render-icon.swift`, packaged as a multi-resolution ICNS, and the app bundle is ad-hoc signed and verified.
+33 automated tests pass, including question/implementation selection, malformed/self/duplicate/missing ballots, partial participation, quorum refusal, and final-editor fallback. These are controlled fixtures, not a benchmark of model answer quality. The native icon is generated from `native/render-icon.swift`, packaged as a multi-resolution ICNS, and the app bundle is ad-hoc signed and verified.
 
 A controlled three-model browser walkthrough confirmed Enter dispatch, collapsed proposal/review cards, the expanded final decision, smoke-tinted sent messages, and the untinted final answer. The API integration check also confirms the default collaborative path persists its selection to history.
 
 The 50-connection capacity test creates 50 entries, edits at capacity, rejects entry 51 without saving its secret, dispatches all 50 through proposals and peer review (49 valid peer scores per model), and verifies the final decision and persisted history. This uses synthetic providers, not 50 physical GPUs.
 
 The aggregated participant bar was checked with staggered synthetic responses: pending Thinking labels, expandable in-progress proposals, completed green names, peer review transitions, and a separate final answer.
+
+Model inventory persistence is verified across server recreation, with invalidation on endpoint changes and deletion. Provider redirect tests confirm credentials are not forwarded; the model-options JavaScript check covers stale Ollama thinking settings. See [security review](SECURITY-REVIEW.md) for the release review scope.

@@ -20,3 +20,4 @@ jobs:
       - run: pytest -q
       - run: node --check borgnet/web/app.js
       - run: node tests/keyboard.cjs
+      - run: node tests/model-options.cjs

@@ -17,9 +17,10 @@ async function api(path, body) {
 function action(fn) { return async event => { try { await fn(event); } catch (error) { toast(error.message); } }; }
 function button(text, handler, className='subtle') { const b=el('button', className, text); b.type='button'; b.addEventListener('click', action(handler)); return b; }
 function cleanConnection(c) { return Object.fromEntries(Object.entries(c).filter(([key]) => !['address','has_key'].includes(key))); }
+function modelOptions(connection,model){const options={...connection.options};if(connection.kind==='ollama'&&model!==connection.model)delete options.think;return options;}
 function selected() { return state.connections.filter(c => c.enabled && c.model); }
 function tab(name) { $$('.tabs button').forEach(b => { b.classList.toggle('active', b.dataset.tab === name); b.setAttribute('aria-pressed', String(b.dataset.tab === name)); }); $$('.panel').forEach(p => p.classList.toggle('active', p.id === name + 'Panel')); }
-async function load() { state = await api('/state'); document.body.dataset.theme = state.theme; $('#theme').value = state.theme; renderConnections(); renderContext(); renderHistory(); }
+async function load() { state = await api('/state'); discovered.clear();for(const [id,models] of Object.entries(state.model_catalog||{}))discovered.set(id,models); document.body.dataset.theme = state.theme; $('#theme').value = state.theme; renderConnections(); renderContext(); renderHistory(); }
 function updateComposer() {
   const welcomeButton = $('#welcomeConnect'); if (welcomeButton) welcomeButton.textContent = state.connections.length ? 'Add another connection ↗' : 'Connect your first model ↗';
   const items = selected(); $('#selectionCount').textContent = `${items.length} model${items.length===1?'':'s'} selected`;
@@ -43,7 +44,7 @@ function renderConnections() {
     const models=[...new Set([...(discovered.get(c.id)||[]),...(c.model?[c.model]:[])])];
     picker.add(new Option(models.length ? 'Choose a model' : 'Discover or enter a model', ''));
     models.forEach(model=>picker.add(new Option(model,model))); picker.value=c.model;
-    picker.addEventListener('change',action(async()=>{await api('/connections',{...cleanConnection(c),model:picker.value}); await load();})); card.append(picker);
+    picker.addEventListener('change',action(async()=>{await api('/connections',{...cleanConnection(c),model:picker.value,options:modelOptions(c,picker.value)}); await load();})); card.append(picker);
     if(c.purpose) card.append(el('p','purpose',c.purpose));
     const h=health.get(c.id), footer=el('footer'); footer.append(el('span',`health${h?.error?' error':''}`,h?.text || 'Not checked'));
     const controls=el('div'); const refresh=button('↻',()=>discover(c.id),'icon'); refresh.title='Discover models'; refresh.setAttribute('aria-label',`Discover models for ${c.address}`); controls.append(refresh);

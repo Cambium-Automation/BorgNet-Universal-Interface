@@ -89,7 +89,9 @@ def create_app(root: Path, provider_transport=None):
                 entry["has_key"] = bool(store.secret(model(**entry)))
                 if field == "connections":
                     entry["address"] = Connection(**entry).address
-        return {**config, "token": token, "context": store.read("context", []), "history": store.read("history", [])}
+        catalog = store.read("model-catalog", {})
+        catalog = {c["id"]: catalog[c["id"]] for c in config["connections"] if c["id"] in catalog}
+        return {**config, "model_catalog": catalog, "token": token, "context": store.read("context", []), "history": store.read("history", [])}
 
     @app.post("/api/connections")
     async def save_connection(request: Request):
@@ -100,12 +102,17 @@ def create_app(root: Path, provider_transport=None):
             raise ValueError("Wait for the active request before editing this connection")
         with store.lock:
             config = store.config()
+            previous = next((c for c in config['connections'] if c['id'] == item.id), None)
             config["connections"] = [c for c in config["connections"] if c["id"] != item.id] + [item.model_dump()]
             if len(config["connections"]) > MAX_CONNECTIONS:
                 raise ValueError(f"Up to {MAX_CONNECTIONS} connections are supported")
             if "api_key" in data and data["api_key"] is not None:
                 store.save_secret(item.id, data["api_key"])
             store.write("config", config)
+            if previous and any(previous.get(k) != item.model_dump().get(k) for k in ('url', 'kind', 'ssh')):
+                catalog = store.read('model-catalog', {})
+                catalog.pop(item.id, None)
+                store.write('model-catalog', catalog)
         await tunnels.stop(item.id)
         return {"id": item.id}
 
@@ -118,6 +125,9 @@ def create_app(root: Path, provider_transport=None):
             config["connections"] = [c for c in config["connections"] if c["id"] != identity]
             store.write("config", config)
             store.save_secret(identity, "")
+            catalog = store.read('model-catalog', {})
+            catalog.pop(identity, None)
+            store.write('model-catalog', catalog)
         await tunnels.stop(identity)
         return {"ok": True}
 
@@ -126,6 +136,13 @@ def create_app(root: Path, provider_transport=None):
         item = find(identity)
         started = time.monotonic()
         models = await providers.models(item)
+        with store.lock:
+            current = find(identity)
+            if any(getattr(current,k) != getattr(item,k) for k in ('url', 'kind', 'ssh')):
+                raise ValueError('Connection changed during discovery; refresh its models again')
+            catalog = store.read('model-catalog', {})
+            catalog[identity] = models
+            store.write('model-catalog', catalog)
         return {"models": models, "latency_ms": round((time.monotonic() - started) * 1000)}
 
     @app.post("/api/connections/{identity}/pull")
