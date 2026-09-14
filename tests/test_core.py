@@ -213,3 +213,36 @@ def test_context_and_followup_reach_only_selected_provider(tmp_path):
         assert 'Do not transmit this' not in json.dumps(calls)
         assert calls[1]['messages'][0]=={'role':'system','content':'Fixture purpose'}
         assert any(m['role']=='assistant' and m['content']=='Fixture answer' for m in calls[1]['messages'])
+
+
+def test_ssh_identity_and_remote_bind_address():
+    settings=SSH(host='compute.example.com',remote_host='service.internal',remote_port=9000,identity_file='~/.ssh/example_key')
+    args=Tunnels.command(settings,23456)
+    assert '127.0.0.1:23456:service.internal:9000' in args
+    assert str(Path('~/.ssh/example_key').expanduser()) in args
+    assert 'IdentitiesOnly=yes' in args
+    with pytest.raises(ValidationError):
+        SSH(host='compute.example.com',remote_host='host:9000:other')
+
+
+async def test_runtime_options_cannot_override_protocol_fields(tmp_path):
+    payloads=[]
+    def record(request):
+        payloads.append(json.loads(request.content))
+        return fixture_response(request)
+    providers=Providers(Store(tmp_path),Tunnels(),httpx.MockTransport(record))
+    item=Connection(kind='ollama',url='http://localhost:1234',model='fixture-chat',options={'num_ctx':4096,'num_predict':96,'think':False,'model':'invalid-override','messages':[]})
+    await providers.chat(item,[{'role':'user','content':'Hi'}])
+    assert payloads[0]['model']=='fixture-chat' and payloads[0]['messages']
+    assert payloads[0]['options']=={'num_ctx':4096,'num_predict':96}
+    assert payloads[0]['think'] is False
+    item.kind='openai';item.options={'max_tokens':32,'temperature':.7,'model':'invalid-override'}
+    await providers.chat(item,[{'role':'user','content':'Hi'}])
+    assert payloads[1]['model']=='fixture-chat' and payloads[1]['max_tokens']==32
+
+
+def test_synthesis_preference_is_persistent(client):
+    identity=add(client)
+    assert client.post('/api/settings',json={'synthesis':identity}).status_code==200
+    assert client.get('/api/state').json()['synthesis']==identity
+    assert client.post('/api/settings',json={'synthesis':'unknown'}).status_code==400

@@ -40,15 +40,19 @@ Discovery currently reads the first model-list page for provider APIs. If a larg
 
 ### Computers over SSH
 
-In a connection, enable **Connect through SSH**, enter a hostname or SSH config alias, optional user, SSH port, and the remote API port. BorgNet opens an SSH tunnel from an ephemeral local loopback port to that computer's loopback API. The URL field supplies the API path prefix (for example `/v1`).
+In a connection, enable **Connect through SSH**, enter a hostname or SSH config alias, optional user, SSH port, and the remote API port. An optional SSH identity-file path and remote API bind address support services bound to a specific interface. BorgNet opens an SSH tunnel from an ephemeral local loopback port to the selected API bind address on that computer (loopback by default). The URL field supplies the API path prefix (for example `/v1`).
 
 Cards and results show **SSH address + actual model ID**, or **API base URL + actual model ID** for direct connections. The purpose field is optional system guidance for that model; there are no predefined hardware roles.
 
-SSH uses agent/key authentication, `BatchMode=yes`, `StrictHostKeyChecking=yes`, and no shell interpolation. First establish trusted access with your SSH client. BorgNet does not accept passwords, enroll host keys, install a remote runtime, execute model-generated commands, or weaken SSH configuration. Remote unencrypted HTTP endpoints must be reached through SSH; direct remote APIs require HTTPS.
+SSH uses agent/key authentication (or the explicitly configured identity file), `BatchMode=yes`, `StrictHostKeyChecking=yes`, and no shell interpolation. First establish trusted access with your SSH client. BorgNet does not accept passwords, enroll host keys, install a remote runtime, execute model-generated commands, or weaken SSH configuration. Remote unencrypted HTTP endpoints must be reached through SSH; direct remote APIs require HTTPS.
 
 ### API keys
 
 Use a key in the connection form, or enter the name of an environment variable available to the BorgNet process. Environment variables take precedence. Saved secrets are separate from configuration, written with owner-only file permissions, and never returned by the API. They are **not encrypted at rest**; use environment variables if that is preferable. Leave the key field blank when editing to keep the saved key. Remove a connection to delete its saved key.
+
+### Per-connection runtime options
+
+The connection form includes a JSON options object and a response timeout. Ollama accepts `num_ctx`, `num_predict`, `temperature`, `top_p`, `top_k`, `think`, and `keep_alive`. OpenAI-compatible endpoints accept `max_tokens`, `max_completion_tokens`, `temperature`, `top_p`, `top_k`, `reasoning_effort`, `reasoning_format`, and `thinking_budget_tokens` when their provider supports them. Model IDs, messages, and streaming controls cannot be overridden through this object. Other adapters retain their protocol defaults. The chosen synthesis connection is saved with workspace settings.
 
 ## One prompt, several perspectives
 

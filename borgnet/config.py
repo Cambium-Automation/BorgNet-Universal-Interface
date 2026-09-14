@@ -24,6 +24,9 @@ class SSH(BaseModel):
     port: int = Field(default=22, ge=1, le=65535)
     remote_port: int = Field(default=11434, ge=1, le=65535)
 
+    remote_host: str = Field(default="127.0.0.1", max_length=253, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+    identity_file: str = Field(default="", max_length=1000)
+
     @property
     def address(self):
         return f"{self.user + '@' if self.user else ''}{self.host}:{self.port}"
@@ -38,6 +41,8 @@ class Connection(BaseModel):
     enabled: bool = True
     key_env: str = Field(default="", max_length=128, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$|^$")
     ssh: SSH | None = None
+    options: dict = Field(default_factory=dict)
+    timeout: int = Field(default=180, ge=10, le=1800)
     _url = field_validator("url")(endpoint)
 
     @property
@@ -85,7 +90,7 @@ class Store:
                     os.unlink(temp)
 
     def config(self):
-        return self.read("config", {"connections": [], "mcp_sources": [], "theme": "system"})
+        return self.read("config", {"connections": [], "mcp_sources": [], "theme": "system", "synthesis": ""})
 
     def secret(self, item):
         return os.environ.get(item.key_env, "") if item.key_env else self.read("secrets", {}).get(item.id, "")

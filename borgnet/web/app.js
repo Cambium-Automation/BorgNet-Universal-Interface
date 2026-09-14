@@ -25,7 +25,7 @@ function updateComposer() {
   const items = selected(); $('#selectionCount').textContent = `${items.length} model${items.length===1?'':'s'} selected`;
   $('#send').disabled = busy || !items.length; $('#stop').hidden = !busy;
   $('#status').textContent = busy ? 'Models are working…' : state.connections.length ? `${state.connections.length} connection${state.connections.length===1?'':'s'} in your workspace` : 'Your workspace, connected.';
-  const previous = $('#synthesis').value; $('#synthesis').replaceChildren(new Option('Keep independent', ''));
+  const previous = state.synthesis || $('#synthesis').value; $('#synthesis').replaceChildren(new Option('Keep independent', ''));
   items.forEach(c => $('#synthesis').add(new Option(`${c.model} · ${c.address}`, c.id)));
   if (items.some(c => c.id === previous)) $('#synthesis').value = previous;
   $('#synthesis').disabled = busy || items.length < 2;
@@ -59,8 +59,8 @@ async function discover(identity) {
 function editConnection(c) {
   const form=$('#connectionForm');form.reset();$('#connectionTitle').textContent=c?'Edit connection':'Connect a provider';
   for(const name of ['id','kind','url','purpose','model','key_env']) form.elements[name].value=c?.[name] || (name==='kind'?'ollama':'');
-  form.elements.use_ssh.checked=Boolean(c?.ssh);
-  for(const [name,field] of [['ssh_host','host'],['ssh_user','user'],['ssh_port','port'],['remote_port','remote_port']]) if(c?.ssh) form.elements[name].value=c.ssh[field];
+  form.elements.use_ssh.checked=Boolean(c?.ssh);form.elements.options.value=JSON.stringify(c?.options||{},null,2);form.elements.timeout.value=c?.timeout||180;
+  for(const [name,field] of [['ssh_host','host'],['ssh_user','user'],['ssh_port','port'],['remote_port','remote_port'],['identity_file','identity_file'],['remote_host','remote_host']]) if(c?.ssh) form.elements[name].value=c.ssh[field];
   $('#sshFields').hidden=!c?.ssh;$('#deleteConnection').hidden=!c;
   $('#keyHint').textContent=c?.has_key?'A key is configured. Leave blank to keep it, or enter a replacement. An environment variable takes precedence.':'Keys are stored separately with owner-only file permissions.';
   $('#connectionDialog').showModal();
@@ -69,7 +69,7 @@ $('#connectionForm').addEventListener('submit',action(async event=>{
   event.preventDefault();const form=event.currentTarget, values=Object.fromEntries(new FormData(form));
   const old=state.connections.find(c=>c.id===values.id);
   const body={id:values.id,kind:values.kind,url:values.url,purpose:values.purpose,model:values.model,key_env:values.key_env,enabled:old?.enabled??true,api_key:values.api_key||null,
-    ssh:form.elements.use_ssh.checked?{host:values.ssh_host,user:values.ssh_user,port:Number(values.ssh_port),remote_port:Number(values.remote_port)}:null};
+    ssh:form.elements.use_ssh.checked?{host:values.ssh_host,user:values.ssh_user,port:Number(values.ssh_port),remote_port:Number(values.remote_port),identity_file:values.identity_file,remote_host:values.remote_host||'127.0.0.1'}:null,options:JSON.parse(values.options||'{}'),timeout:Number(values.timeout)};
   const result=await api('/connections',body);$('#connectionDialog').close();await load();await discover(result.id);
 }));
 $('#connectionForm').elements.use_ssh.addEventListener('change',event=>{$('#sshFields').hidden=!event.target.checked;});
@@ -110,3 +110,5 @@ $('#addMcp').addEventListener('click',()=>editMcp());$('#addContext').addEventLi
 $('#refresh').addEventListener('click',action(async()=>{await Promise.all(state.connections.map(c=>discover(c.id)));}));
 $('#theme').addEventListener('change',action(async event=>{await api('/settings',{theme:event.target.value});await load();}));
 load().catch(error=>toast(error.message));
+
+$('#synthesis').addEventListener('change',action(async event=>{state.synthesis=event.target.value;await api('/settings',{synthesis:state.synthesis});}));

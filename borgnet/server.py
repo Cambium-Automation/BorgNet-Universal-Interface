@@ -208,11 +208,16 @@ def create_app(root: Path, provider_transport=None):
     @app.post("/api/settings")
     async def settings(request: Request):
         data = await request.json()
-        if data.get("theme") not in {"system", "dark", "light"}:
+        if "theme" in data and data["theme"] not in {"system", "dark", "light"}:
             raise ValueError("Choose system, dark, or light")
         with store.lock:
             config = store.config()
-            config["theme"] = data["theme"]
+            if "theme" in data:
+                config["theme"] = data["theme"]
+            if "synthesis" in data:
+                if data["synthesis"] and data["synthesis"] not in {c["id"] for c in config["connections"]}:
+                    raise ValueError("Select a configured synthesis connection")
+                config["synthesis"] = data["synthesis"]
             store.write("config", config)
         return {"ok": True}
 

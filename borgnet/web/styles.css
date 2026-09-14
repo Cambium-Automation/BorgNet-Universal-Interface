@@ -19,3 +19,4 @@ button,select,input,textarea{border-radius:7px}
 .user-message{border-radius:8px}
 dialog{border-radius:12px}
 #toast{border-radius:8px}
+.connection .purpose{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}

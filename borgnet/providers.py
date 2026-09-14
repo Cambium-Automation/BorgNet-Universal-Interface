@@ -1,6 +1,7 @@
 """Small, explicit adapters; model identities always come from the user's endpoint."""
 import asyncio
 import socket
+from pathlib import Path
 from urllib.parse import urlsplit, quote
 import httpx
 from .config import Connection
@@ -17,7 +18,7 @@ class Tunnels:
         return ["ssh", "-N", "-T", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
                 "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10",
                 "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
-                "-p", str(ssh.port), "-L", f"127.0.0.1:{port}:127.0.0.1:{ssh.remote_port}", target]
+                "-p", str(ssh.port), "-L", f"127.0.0.1:{port}:{ssh.remote_host}:{ssh.remote_port}"] + (["-i", str(Path(ssh.identity_file).expanduser()), "-o", "IdentitiesOnly=yes"] if ssh.identity_file else []) + [target]
 
     async def url(self, item):
         if not item.ssh:
@@ -65,7 +66,7 @@ class Providers:
     def __init__(self, store, tunnels, transport=None):
         self.store, self.tunnels, self.transport = store, tunnels, transport
 
-    async def request(self, item, method, path, payload=None, timeout=180):
+    async def request(self, item, method, path, payload=None, timeout=None):
         base = await self.tunnels.url(item)
         key = self.store.secret(item)
         headers = {}
@@ -78,7 +79,7 @@ class Providers:
                 headers["x-goog-api-key"] = key
         elif key:
             headers["Authorization"] = f"Bearer {key}"
-        async with httpx.AsyncClient(transport=self.transport, timeout=timeout, follow_redirects=False, trust_env=False) as client:
+        async with httpx.AsyncClient(transport=self.transport, timeout=timeout or item.timeout, follow_redirects=False, trust_env=False) as client:
             try:
                 response = await client.request(method, base + path, json=payload, headers=headers)
             except httpx.HTTPError:
@@ -106,10 +107,13 @@ class Providers:
             raise ValueError("Select a discovered model or enter a model ID first")
         if item.kind == "ollama":
             data = await self.request(item, "POST", "/api/chat", {"model": item.model, "stream": False,
+                **{k: v for k, v in item.options.items() if k in {"think", "keep_alive"}},
+                "options": {k: v for k, v in item.options.items() if k in {"num_ctx", "num_predict", "temperature", "top_p", "top_k"}},
                 "messages": ([{"role": "system", "content": system}] if system else []) + messages})
             answer = data.get("message", {}).get("content", "")
         elif item.kind == "openai":
             data = await self.request(item, "POST", "/chat/completions", {"model": item.model, "stream": False,
+                **{k: v for k, v in item.options.items() if k in {"max_tokens", "max_completion_tokens", "temperature", "top_p", "top_k", "reasoning_effort", "reasoning_format", "thinking_budget_tokens"}},
                 "messages": ([{"role": "system", "content": system}] if system else []) + messages})
             choices = data.get("choices", [])
             answer = choices[0].get("message", {}).get("content", "") if choices else ""
