@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, ValidationError
 from .config import Connection, MCPSource, Store
 from .providers import Providers, Tunnels
 from .mcp_bridge import inspect_source, fetch_context
+from .collaboration import collaborate
 
 WEB = Path(__file__).parent / "web"
 
@@ -23,6 +24,7 @@ class Dispatch(BaseModel):
     contexts: list[str] = Field(default_factory=list, max_length=32)
     conversation: str = Field(default="", max_length=64)
     synthesize: str = Field(default="", max_length=64)
+    collaborate: bool = True
 
 
 def create_app(root: Path, provider_transport=None):
@@ -215,7 +217,7 @@ def create_app(root: Path, provider_transport=None):
             if "theme" in data:
                 config["theme"] = data["theme"]
             if "synthesis" in data:
-                if data["synthesis"] and data["synthesis"] not in {c["id"] for c in config["connections"]}:
+                if data["synthesis"] and data["synthesis"] != "__independent__" and data["synthesis"] not in {c["id"] for c in config["connections"]}:
                     raise ValueError("Select a configured synthesis connection")
                 config["synthesis"] = data["synthesis"]
             store.write("config", config)
@@ -223,6 +225,8 @@ def create_app(root: Path, provider_transport=None):
 
     @app.post("/api/dispatch")
     async def dispatch(data: Dispatch):
+        if data.collaborate and len(data.prompt) > 12000:
+            raise ValueError("Collaborative requests support up to 12,000 prompt characters; narrow the request or use independent answers")
         selected = [find(identity) for identity in dict.fromkeys(data.connections)]
         if any(not c.enabled or not c.model for c in selected):
             raise ValueError("Enable each selected connection and choose its model")
@@ -263,6 +267,16 @@ def create_app(root: Path, provider_transport=None):
                 result["seconds"] = round(time.monotonic() - started, 2)
                 record["results"].append(result)
                 await queue.put({"type": "result", **result})
+            if data.collaborate and len(selected) > 1:
+                try:
+                    yield json.dumps({"type": "run", "conversation": conversation}) + "\n"
+                    async for event in collaborate(providers, selected, data.prompt, context_text, prior, data.synthesize or store.config().get("synthesis", ""), record):
+                        yield json.dumps(event) + "\n"
+                    yield json.dumps({"type": "done", "id": record["id"]}) + "\n"
+                finally:
+                    active.difference_update(c.id for c in selected)
+                    store.append("history", record)
+                return
             tasks = [asyncio.create_task(run(c)) for c in selected]
             try:
                 yield json.dumps({"type": "run", "conversation": conversation}) + "\n"

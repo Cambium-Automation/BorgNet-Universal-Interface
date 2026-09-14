@@ -5,7 +5,8 @@ The repository is standalone. The browser and macOS shell connect to a loopback 
 - `borgnet/config.py`: validation, empty defaults, atomic local state and separate secret storage.
 - `borgnet/providers.py`: discovery/chat adapters and owned SSH tunnel processes. No hardware inventory or static model registry.
 - `borgnet/mcp_bridge.py`: official SDK client sessions plus the read-only, opt-in shared-context server.
-- `borgnet/server.py`: same-origin API, parallel dispatch, per-provider errors, optional synthesis, and local history.
+- `borgnet/server.py`: same-origin API, parallel dispatch, per-provider errors, collaborative dispatch, optional independent synthesis, and local history.
+- `borgnet/collaboration.py`: bounded proposal/review/decision rounds, validated peer ballots, deterministic ranking, quorum checks, and an auditable final selection.
 - `borgnet/web/`: dependency-free browser UI, glass styling, dynamic cards, accessible forms, and safe text rendering. Model text is rendered as text, not trusted HTML.
 - `native/`: independent AppKit/WKWebView shell, public glass APIs, normal title bar, and no dependency on another installed bundle.
 

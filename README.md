@@ -2,7 +2,7 @@
 
 A local-first glass workspace for the models and computers **you** choose.
 
-Bring local runtimes, remote computers, cloud APIs, and MCP data sources into one interface. Start with an empty workspace, discover models from your endpoints, assign each connection a purpose, and send one prompt to one or several models. Optionally ask a selected model to synthesize their responses.
+Bring local runtimes, remote computers, cloud APIs, and MCP data sources into one interface. Start with an empty workspace, discover models from your endpoints, assign each connection a purpose, and send one prompt to one or several models. With multiple models selected, they propose solutions, independently review their peers, and produce one ranked final answer or implementation plan.
 
 No bundled accounts, machine inventory, preselected models, credentials, private workflows, or conversation data. No telemetry, external fonts, hosted frontend, or automatic network discovery.
 
@@ -56,7 +56,11 @@ The connection form includes a JSON options object and a response timeout. Ollam
 
 ## One prompt, several perspectives
 
-Enable the connections you want to use. Enter sends to every enabled connection with a selected model. Each provider runs independently, and its full answer appears as soon as it finishes; this release streams completion events, not individual tokens. Errors are shown per provider and are not presented as successful answers. Optional synthesis starts after independent responses finish and requires at least two successful responses.
+Enable the connections you want to use. Enter sends to every enabled connection with a selected model. With two or more models, collaboration is the default: independent proposals, peer scoring of every other proposal, then a final decision from the three highest-ranked proposals. Questions select one supported answer; code/design requests select up to three complementary proposals and include implementation and verification plans. The selected collaboration model writes the final decision, with one fallback editor if it fails. Proposals and reviews stay available in expandable cards. Your sent messages have a translucent smoke background; the unified response stays clear.
+
+A valid review must score every peer exactly once and cannot score itself. A decision needs at least two successful proposals and valid reviews from at least half the responders (minimum two). Invalid reviews get one format retry, then abstain. Missing participation is disclosed. Scores guide model judgment; they do not prove correctness. BorgNet selects and plans work, but does not execute generated code or edits. Choose “Independent answers only” to skip review.
+
+Collaboration allows 12,000 prompt characters, excerpts shared reference data to 24,000 characters and the proposal pool to approximately 18,000 characters, and bounds each provider call by its configured timeout or 600 seconds, whichever is shorter. Completion events stream after full responses, not token by token. Errors are retained in history. Stopping cancels local pending calls; providers may continue already accepted work.
 
 Follow-up prompts include up to eight prior turns for the same connection in the current conversation. **New conversation** starts fresh; **History** resumes a saved conversation. Selected context is attached only when you choose it. Context and prompts are transmitted to the selected providers, including cloud providers. **Stop** cancels local pending requests; a remote provider may continue work or charge for a request it has already accepted.
 
@@ -103,4 +107,4 @@ node --check borgnet/web/app.js
 node tests/keyboard.cjs
 ```
 
-Tests use synthetic HTTP provider fixtures and a real local MCP stdio session. They cover all four protocol adapters, discovery, downloads, parallel dispatch and synthesis, history, privacy boundaries, SSH argument validation, and Enter behavior. They do not use real credentials, download real models, or contact any user's computers. See [verification notes](docs/VERIFICATION.md) for the tested scope and [architecture](docs/ARCHITECTURE.md) for extension points.
+Tests use synthetic HTTP provider fixtures and a real local MCP stdio session. They cover all four protocol adapters, discovery, downloads, parallel dispatch, peer ballot validation, ranking, implementation plans, incomplete participation, editor fallback, synthesis, history, privacy boundaries, SSH argument validation, and Enter behavior. They do not use real credentials, download real models, or contact any user's computers. See [verification notes](docs/VERIFICATION.md) for the tested scope and [architecture](docs/ARCHITECTURE.md) for extension points.

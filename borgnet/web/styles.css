@@ -20,3 +20,11 @@ button,select,input,textarea{border-radius:7px}
 dialog{border-radius:12px}
 #toast{border-radius:8px}
 .connection .purpose{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+
+.result summary{display:flex;align-items:center;justify-content:space-between;background:var(--surface);padding:11px 16px;gap:10px;cursor:pointer}.result summary strong{font-size:12px}.result summary small{display:block;color:var(--muted);font:10px/1.5 ui-monospace,monospace}.result summary:before{content:'›';color:var(--muted)}.result[open] summary:before{content:'⌄'}
+
+/* Sent messages carry smoke tint; the unified answer retains clear glass. */
+.user-message,.history-item{background:rgba(12,18,22,.28);color:var(--text)}
+.history-item small{color:var(--text);opacity:.75}
+.history-item:hover:not(:disabled){background:rgba(12,18,22,.36)}
+.result.synthesis,.result.synthesis>header,.result.synthesis>.answer{background:transparent}

@@ -14,12 +14,14 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>BorgNet Universal Interface</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleVersion</key><string>2</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict></plist>
 PLIST
+cp "$SOURCE_DIR/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
 xcrun swiftc -sdk "$SDK" -target "$(uname -m)-apple-macosx13.0" -O \
   -framework Cocoa -framework WebKit "$SOURCE_DIR/main.swift" -o "$APP/Contents/MacOS/BorgNet"

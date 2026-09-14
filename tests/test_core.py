@@ -94,7 +94,7 @@ async def test_blank_answer_is_error(tmp_path):
 
 def test_parallel_dispatch_and_history(client):
     one=add(client,purpose='Research');two=add(client,kind='openai',url='http://localhost:1234/v1',purpose='Review')
-    response=client.post('/api/dispatch',json={'prompt':'Fixture question','connections':[one,two],'synthesize':two})
+    response=client.post('/api/dispatch',json={'collaborate':False,'prompt':'Fixture question','connections':[one,two],'synthesize':two})
     assert response.status_code==200,response.text
     events=[json.loads(line) for line in response.text.splitlines()]
     results=[e for e in events if e['type']=='result']
@@ -111,7 +111,7 @@ def test_discovery_pull_and_disabled_guard(client):
     assert client.post(f'/api/connections/{identity}/discover',json={}).json()['models']==['fixture-chat']
     assert client.post(f'/api/connections/{identity}/pull',json={'model':'fixture-download'}).json()['status']=='success'
     add(client,id=identity,enabled=False)
-    assert client.post('/api/dispatch',json={'prompt':'Hi','connections':[identity]}).status_code==400
+    assert client.post('/api/dispatch',json={'collaborate':False,'prompt':'Hi','connections':[identity]}).status_code==400
 
 
 def test_ssh_validation_and_no_shell():
@@ -190,7 +190,7 @@ def test_partial_failure_is_not_successful_consensus(tmp_path):
     with TestClient(create_app(tmp_path,httpx.MockTransport(respond))) as client:
         client.headers['X-BorgNet-Token']=client.get('/api/state').json()['token']
         first=add(client);second=add(client,kind='openai',url='http://localhost:1234/v1')
-        response=client.post('/api/dispatch',json={'prompt':'Check failure','connections':[first,second],'synthesize':first})
+        response=client.post('/api/dispatch',json={'collaborate':False,'prompt':'Check failure','connections':[first,second],'synthesize':first})
         results=[e for e in map(json.loads,response.text.splitlines()) if e['type']=='result']
         assert [r['status'] for r in results].count('complete')==1
         assert results[-1]['synthesis'] and results[-1]['status']=='error'
@@ -206,9 +206,9 @@ def test_context_and_followup_reach_only_selected_provider(tmp_path):
         identity=add(client,purpose='Fixture purpose')
         context=client.post('/api/context',json={'title':'Selected context','text':'Selected reference text'}).json()
         client.post('/api/context',json={'title':'Private context','text':'Do not transmit this'})
-        first=client.post('/api/dispatch',json={'prompt':'First question','connections':[identity],'contexts':[context['id']]}).text
+        first=client.post('/api/dispatch',json={'collaborate':False,'prompt':'First question','connections':[identity],'contexts':[context['id']]}).text
         conversation=json.loads(first.splitlines()[0])['conversation']
-        client.post('/api/dispatch',json={'prompt':'Follow up','connections':[identity],'conversation':conversation})
+        client.post('/api/dispatch',json={'collaborate':False,'prompt':'Follow up','connections':[identity],'conversation':conversation})
         assert 'Selected reference text' in json.dumps(calls[0])
         assert 'Do not transmit this' not in json.dumps(calls)
         assert calls[1]['messages'][0]=={'role':'system','content':'Fixture purpose'}
