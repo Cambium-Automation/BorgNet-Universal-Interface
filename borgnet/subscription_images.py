@@ -1,8 +1,9 @@
 """Opt-in native image tools through installed, already authenticated CLIs."""
-import asyncio,json,os,signal,time,uuid,shutil
+import asyncio,json,os,time,uuid,shutil
 from pathlib import Path
 from datetime import datetime,timezone
 from types import SimpleNamespace
+from .cli_text import stop
 
 def create_subscription_images(root,state_store):
  ROOT=Path(root)
@@ -44,7 +45,7 @@ def create_subscription_images(root,state_store):
    argv=[shutil.which('codex'),'exec','--ignore-user-config','--ephemeral','--skip-git-repo-check','--sandbox','workspace-write','--disable','shell_tool','--disable','plugins','-C',str(job),'--json',instruction]
    if identity=='signedin::grok':
     instruction='Use your native image_gen tool to generate exactly one image from this request. Do not use MCP servers, new API keys, or unrelated files. Return the generated image path. IMAGE REQUEST: '+prompt
-    argv=[shutil.which('grok'),'--cwd',str(job),'--output-format','json','--max-turns','4','--no-plan','--no-subagents','--disable-web-search','--sandbox','workspace','--tools','image_gen','--allow','image_gen','--permission-mode','dontAsk','-p',instruction]
+    argv=[shutil.which('grok'),'--cwd',str(job),'--output-format','json','--max-turns','4','--no-plan','--no-subagents','--disable-web-search','--sandbox','workspace','--tools','image_gen','--deny','MCPTool','--allow','image_gen','--permission-mode','dontAsk','-p',instruction]
    start=time.monotonic()
    with (job/'events.jsonl').open('wb') as out,(job/'stderr.log').open('wb') as err:
     process=await asyncio.create_subprocess_exec(*argv,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,start_new_session=True)
@@ -62,15 +63,8 @@ def create_subscription_images(root,state_store):
        if not task.done():task.cancel()
       await asyncio.gather(*tasks,return_exceptions=True)
     try:await asyncio.wait_for(bounded_wait(),420)
-    except BaseException:
-     try:os.killpg(process.pid,signal.SIGTERM)
-     except ProcessLookupError:pass
-     try:await asyncio.wait_for(process.wait(),5)
-     except TimeoutError:
-      try:os.killpg(process.pid,signal.SIGKILL)
-      except ProcessLookupError:pass
-      await process.wait()
-     raise
+    finally:
+     await stop(process)
    paths=[p for p in job.rglob('*') if p.suffix.lower() in {'.png','.jpg','.jpeg','.webp'} and not p.is_symlink() and p.is_file() and p.resolve().is_relative_to(job.resolve())]
    if identity=='signedin::grok':
     try:

@@ -3,10 +3,15 @@ import asyncio
 import json
 import codecs
 import os
+import sys
+import time
+import subprocess
+import re
 from pathlib import Path
 import shutil
 import signal
 import tempfile
+from .permissions import Policy, instructions
 
 NAMES = {"codex": "Codex", "grok": "Grok", "gemini": "Gemini", "copilot": "Copilot"}
 LIMIT = 1024 * 1024
@@ -25,7 +30,8 @@ def models(item):
     return list(dict.fromkeys(["default", *([item.model] if item.model else [])]))
 
 
-def command(item, job, prompt):
+def command(item, job, prompt, policy=None):
+    policy = policy or Policy()
     provider = item.cli_provider
     argv = [executable(provider)]
     model = ["--model", item.model] if item.model != "default" else []
@@ -34,6 +40,12 @@ def command(item, job, prompt):
                  "--sandbox", "read-only", "--disable", "shell_tool", "--disable", "plugins",
                  "--color", "never", "--output-last-message", str(job / "answer.txt"),
                  *model, "-"]
+        if policy.full_access:
+            i = argv.index('--sandbox'); del argv[i:i+2]
+            i = argv.index('shell_tool'); del argv[i-1:i+1]
+            argv.insert(1, '--dangerously-bypass-approvals-and-sandbox')
+        if policy.network or policy.full_access:
+            argv.insert(1, '--search')
         return argv, prompt.encode()
     if provider == "grok":
         path = job / "prompt.txt"
@@ -44,14 +56,26 @@ def command(item, job, prompt):
         if item.cli_agent:
             argv += ["--agent", item.cli_agent]
     elif provider == "gemini":
-        policy = job / "text-only.toml"
-        policy.write_text('[[rule]]\ntoolName = "*"\ndecision = "deny"\npriority = 999\n')
-        argv += ["--output-format", "json", "--admin-policy", str(policy),
+        policy_file = job / "text-only.toml"
+        policy_file.write_text('[[rule]]\ntoolName = "*"\ndecision = "deny"\npriority = 999\n')
+        argv += ["--output-format", "json", "--admin-policy", str(policy_file),
                  "--extensions", "none", *model, "--prompt", prompt]
     else:
         argv += ["--available-tools=", "--disable-builtin-mcps", "--no-custom-instructions",
                  "--no-ask-user", "--no-auto-update", "--no-remote", "--no-remote-export",
                  "--no-color", "--silent", *model, "--prompt", prompt]
+    if provider == 'grok' and (policy.network or policy.full_access):
+        argv.remove('--disable-web-search')
+        argv[argv.index('--max-turns') + 1] = '20'
+        argv[argv.index('--tools') + 1] = 'web_search,web_fetch'
+        argv += ['--allow', 'WebFetch']
+        if policy.full_access:
+            i = argv.index('--tools'); del argv[i:i+2]
+            argv[argv.index('--permission-mode') + 1] = 'bypassPermissions'
+            argv += ['--sandbox', 'off']
+    elif provider == 'copilot' and policy.full_access:
+        argv.remove('--available-tools=')
+        argv += ['--allow-all']
     return argv, b""
 
 
@@ -87,28 +111,33 @@ async def bounded_read(stream):
 
 
 async def stop(process):
-    # Descendants can retain pipes even after the CLI parent has exited.
+    """Terminate the job's process group, including children surviving their parent."""
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
-        pass
-    if process.returncode is None:
-        try:
+        return
+    try:
+        if process.returncode is None:
             await asyncio.wait_for(process.wait(), 2)
-        except TimeoutError:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            await process.wait()
+    except TimeoutError:
+        pass
+    finally:
+        # A completed parent does not imply its descendants honored SIGTERM.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if process.returncode is None:
+        await process.wait()
 
 
 class CLIText:
     def __init__(self):
         self.locks = {}
 
-    async def chat(self, item, messages, system, response_schema, on_delta=None):
-        prompt = "Answer the supplied conversation as a text-only BorgNet participant. Do not use tools.\n"
+    async def chat(self, item, messages, system, response_schema, on_delta=None, policy=None):
+        policy = policy or Policy()
+        prompt = instructions(policy) + "Verify machine facts before stating them.\n"
         prompt += json.dumps({"system": system, "messages": messages}, ensure_ascii=False)
         if response_schema is not None:
             prompt += "\nReturn only JSON matching this schema:\n" + json.dumps(response_schema)
@@ -117,7 +146,11 @@ class CLIText:
         async with self.locks.setdefault(item.cli_provider, asyncio.Lock()):
             with tempfile.TemporaryDirectory(prefix="borgnet-cli-") as directory:
                 job = Path(directory)
-                argv, data = command(item, job, prompt)
+                argv, data = command(item, job, prompt, policy)
+                env = os.environ.copy()
+                env.pop("BORGNET_AUTOMATION_GRANT", None)
+                if policy.full_access and (policy.browser or policy.computer):
+                    argv, env = automation_command(item, job, argv, env, policy)
                 streaming = on_delta is not None and item.cli_provider in {'grok', 'copilot'}
                 if streaming and item.cli_provider == 'grok':
                     argv[argv.index('--output-format') + 1] = 'streaming-json'
@@ -156,9 +189,9 @@ class CLIText:
                         await on_delta(tail)
                     return b''
 
-                process = await asyncio.create_subprocess_exec(*argv, cwd=job,
+                process = await asyncio.create_subprocess_exec(*argv, cwd=policy.workspace if policy.full_access else job,
                     stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE, start_new_session=True)
+                    stderr=asyncio.subprocess.PIPE, start_new_session=True, env=env)
                 async def exchange():
                     async def write():
                         try:
@@ -193,3 +226,38 @@ class CLIText:
                     raise ValueError(f"{NAMES[item.cli_provider]} CLI timed out") from None
                 finally:
                     await stop(process)
+
+
+def automation_command(item, job, argv, env, policy):
+    from .adapter_setup import entrypoint, grok_registered
+    grant = job / 'automation-grant.json'
+    grant.write_text(json.dumps({'browser':policy.browser,'computer':policy.computer,
+                                 'expires':time.time()+min(item.timeout,1800)}))
+    grant.chmod(0o600)
+    env['BORGNET_AUTOMATION_GRANT']=str(grant)
+    server={'command':sys.executable,'args':[entrypoint()],
+            'env':{'BORGNET_AUTOMATION_GRANT':str(grant)}}
+    if item.cli_provider=='codex':
+        # CLI overrides are scoped to this invocation; the user's global config stays untouched.
+        for key,value in {**server,'enabled':True,'required':True,'startup_timeout_sec':30,'tool_timeout_sec':45,'default_tools_approval_mode':'auto'}.items():
+            if isinstance(value,dict):
+                literal='{'+', '.join(k+'='+json.dumps(v) for k,v in value.items())+'}'
+            else:literal=json.dumps(value)
+            argv[1:1]=['-c','mcp_servers.borgnet_automation.'+key+'='+literal]
+    elif item.cli_provider=='copilot':
+        argv+=['--additional-mcp-config',json.dumps({'mcpServers':{'borgnet_automation':{**server,'type':'local','tools':['*']}}})]
+    elif item.cli_provider=='grok':
+        if not grok_registered():raise ValueError('Run borgnet adapters install to register the gated Grok adapter.')
+        listed=subprocess.run([argv[0],'mcp','list','--json'],capture_output=True,text=True,timeout=15,check=True)
+        servers=json.loads(listed.stdout)
+        if not isinstance(servers,list):raise ValueError('Grok MCP inventory is not readable; adapter access refused.')
+        names=[]
+        for server in servers:
+            name=server.get('name','')
+            if not re.fullmatch(r'[A-Za-z0-9_-]+',name):raise ValueError('Grok MCP inventory contains an unsupported name; adapter access refused.')
+            names.append(name)
+        index=argv.index('--deny');del argv[index:index+2]
+        for name in names:
+            if name!='borgnet_automation':argv+=['--deny',f'MCPTool({name}__*)']
+        argv+=['--allow','MCPTool(borgnet_automation__*)']
+    return argv,env

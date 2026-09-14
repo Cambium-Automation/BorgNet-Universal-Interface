@@ -59,7 +59,7 @@ def rank_proposals(ballots):
                   key=lambda row: (-row['score'], -row['reviews'], row['proposal_id']))
 
 
-def decision_text(decision, ranking, partial):
+def decision_text(decision, partial):
     text = decision.answer.strip()
     if decision.task_type == 'implementation':
         text += '\n\nSelected proposals: ' + ', '.join(decision.selected_proposals)
@@ -73,7 +73,7 @@ def decision_text(decision, ranking, partial):
 
 
 async def collaborate(providers, selected, prompt, context, prior, coordinator_id, record, deadline=600):
-    """Yield UI events and retain auditable round records. No generated code is executed."""
+    """Yield UI events and retain auditable round records. CLI actions follow configured permissions."""
     proposals, valid_ballots, review_errors = {}, {}, []
     proposal_ids = {item.id: f'P{i+1}' for i, item in enumerate(selected)}
     queue = asyncio.Queue(maxsize=256)
@@ -224,7 +224,7 @@ async def collaborate(providers, selected, prompt, context, prior, coordinator_i
                         raise ValueError('A question must select one best-supported proposal')
                     if task_type == 'implementation' and (not decision.implementation_plan or not decision.verification_plan):
                         raise ValueError('Implementation decision requires concrete implementation and verification plans')
-                    result.update(status='partial' if partial else 'complete', text=decision_text(decision,ranked,partial), decision=decision.model_dump(), ranking=ranked)
+                    result.update(status='partial' if partial else 'complete', text=decision_text(decision,partial), decision=decision.model_dump(), ranking=ranked)
                     record['results'].append(result)
                     await queue.put({'type':'result', **result})
                     return

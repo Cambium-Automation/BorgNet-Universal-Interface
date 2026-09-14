@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 from urllib.parse import urlsplit, quote
 import httpx
-from .config import Connection
 from .cli_text import CLIText, models as cli_models
 from .streaming import listener, stream_request
 
@@ -150,7 +149,8 @@ class Providers:
         if not item.model:
             raise ValueError("Select a discovered model or enter a model ID first")
         if item.kind == "cli":
-            return await self.cli.chat(item, messages, system, response_schema, on_delta=listener.get())
+            from .permissions import effective
+            return await self.cli.chat(item, messages, system, response_schema, on_delta=listener.get(), policy=effective(self.store, item))
         if item.kind == "ollama":
             data = await self.request(item, "POST", "/api/chat", {"model": item.model, "stream": False,
                 **({"format": response_schema} if response_schema is not None else {}),

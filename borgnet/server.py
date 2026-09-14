@@ -5,15 +5,17 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlsplit
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from .config import Connection, MCPSource, Store, MAX_CONNECTIONS
 from .providers import Providers, Tunnels
+from .permissions import Permissions
 from .mcp_bridge import inspect_source, fetch_context
 from .collaboration import collaborate
+from .debate import debate
+from typing import Literal
 
 WEB = Path(__file__).parent / "web"
 
@@ -25,6 +27,10 @@ class Dispatch(BaseModel):
     conversation: str = Field(default="", max_length=64)
     synthesize: str = Field(default="", max_length=64)
     collaborate: bool = True
+    collaboration_mode: Literal["review", "debate"] = "review"
+    debate_rounds: int = Field(default=3, ge=1, le=6)
+    implement: bool = False
+    executor: str = ""
 
 
 def create_app(root: Path, provider_transport=None):
@@ -120,6 +126,7 @@ def create_app(root: Path, provider_transport=None):
         with store.lock:
             config = store.config()
             config["connections"] = [c for c in config["connections"] if c["id"] != identity]
+            config.get("permissions", {}).get("overrides", {}).pop(identity, None)
             store.write("config", config)
             store.save_secret(identity, "")
             catalog = store.read('model-catalog', {})
@@ -183,6 +190,7 @@ def create_app(root: Path, provider_transport=None):
         with store.lock:
             config = store.config()
             config["mcp_sources"] = [c for c in config["mcp_sources"] if c["id"] != identity]
+            config.get("permissions", {}).get("overrides", {}).pop(identity, None)
             store.write("config", config)
             store.save_secret(identity, "")
         return {"ok": True}
@@ -225,6 +233,51 @@ def create_app(root: Path, provider_transport=None):
             store.write("context", [c for c in store.read("context", []) if c["id"] != identity])
         return {"ok": True}
 
+    adapter_test_lock = asyncio.Lock()
+
+    @app.post("/api/adapters/browser-test")
+    async def test_browser_adapter():
+        from .automation import Browser
+        if adapter_test_lock.locked():
+            raise ValueError("Browser check is already running")
+        async with adapter_test_lock:
+            browser = Browser()
+            try:
+                async with asyncio.timeout(45):
+                    page = await browser.start()
+                    # Fixed offline fixture only; this endpoint accepts no URL, commands or user data.
+                    await page.set_content('<title>BorgNet adapter check</title><label>Adapter check<input aria-label="Adapter check"></label><button onclick="this.textContent=document.querySelector(\'input\').value">Check</button>')
+                    await page.get_by_label('Adapter check').fill('Browser adapter ready')
+                    await page.get_by_role('button', name='Check', exact=True).click()
+                    if await page.get_by_role('button').inner_text() != 'Browser adapter ready':
+                        raise ValueError("Browser form interaction did not complete")
+                    return {"ok": True, "message": "Chromium launched and completed an offline form interaction."}
+            except Exception:
+                raise ValueError("Browser check failed. Run borgnet adapters install and verify the graphical session/native libraries.") from None
+            finally:
+                await browser.close()
+
+    @app.get("/api/adapters")
+    async def adapter_status():
+        from .adapter_setup import status
+        return await asyncio.to_thread(status)
+
+    @app.get("/api/permissions")
+    async def get_permissions():
+        return Permissions.model_validate(store.config().get("permissions", {})).model_dump()
+
+    @app.post("/api/permissions")
+    async def save_permissions(data: Permissions):
+        if active:
+            raise ValueError("Wait for active model requests to finish before changing permissions")
+        with store.lock:
+            config = store.config()
+            if set(data.overrides) - {c["id"] for c in config["connections"]}:
+                raise ValueError("Select configured connections for permission overrides")
+            config["permissions"] = data.model_dump()
+            store.write("config", config)
+        return {"ok": True}
+
     @app.post("/api/settings")
     async def settings(request: Request):
         data = await request.json()
@@ -252,6 +305,16 @@ def create_app(root: Path, provider_transport=None):
             raise ValueError("A selected connection is already busy")
         if data.synthesize and data.synthesize not in {c.id for c in selected}:
             raise ValueError("Choose a selected connection to synthesize")
+        if data.collaboration_mode == 'debate':
+            if not data.collaborate or not 2 <= len(selected) <= 8:
+                raise ValueError("Debate requires 2–8 enabled models")
+            if data.implement:
+                from .permissions import effective
+                executor = next((c for c in selected if c.id == data.executor), None)
+                if executor is None or not effective(store, executor).full_access:
+                    raise ValueError("Choose a selected CLI executor with Full CLI access in Permissions")
+        elif data.implement:
+            raise ValueError("Implementation after agreement is available in Debate mode")
         contexts = [c for c in store.read("context", []) if c["id"] in data.contexts]
         context_text = "\n\n".join(f"[{c['title']}]\n{c['text']}" for c in contexts)
         if len(context_text) > 150_000:
@@ -291,7 +354,9 @@ def create_app(root: Path, provider_transport=None):
             if data.collaborate and len(selected) > 1:
                 try:
                     yield json.dumps({"type": "run", "conversation": conversation}) + "\n"
-                    async for event in collaborate(providers, selected, data.prompt, context_text, prior, data.synthesize or store.config().get("synthesis", ""), record):
+                    conference = debate if data.collaboration_mode == 'debate' else collaborate
+                    options = dict(rounds=data.debate_rounds, implement=data.implement, executor_id=data.executor) if data.collaboration_mode == 'debate' else {}
+                    async for event in conference(providers, selected, data.prompt, context_text, prior, data.synthesize or store.config().get("synthesis", ""), record, **options):
                         yield json.dumps(event) + "\n"
                     yield json.dumps({"type": "done", "id": record["id"]}) + "\n"
                 finally:

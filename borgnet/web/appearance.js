@@ -80,7 +80,7 @@
     try{localStorage.setItem(key,JSON.stringify(preferences));$('appearanceSaveState').textContent='Saved on this device.';}catch{$('appearanceSaveState').textContent='Preview applied; device storage is unavailable.';}
   }
   for(const [id,[label]] of Object.entries(sections))$('appearanceSection').add(new Option(label,id));
-  $('appearanceSettings').addEventListener('click',()=>{populate();$('appearanceDialog').showModal();});
+  $('appearanceSettings').addEventListener('click',()=>{populate();window.borgnetTransitions.openDialog($('appearanceDialog'));});
   $('appearanceSection').addEventListener('change',populate);
   $('appearanceBlur').addEventListener('input',()=>{
     preferences.backgroundBlurRadius=Number($('appearanceBlur').value);apply();
@@ -93,7 +93,7 @@
     $('appearanceBlurStatus').textContent=event.detail.available?'Softens background detail without changing tint or opacity. Text stays sharp.':'Adjustable desktop blur is unavailable on this macOS version.';
   });
   for(const input of [...Object.values(fields),'appearanceOpacity'])$(input).addEventListener('input',update);
-  for(const id of ['closeAppearance','doneAppearance'])$(id).addEventListener('click',()=>$('appearanceDialog').close());
+  for(const id of ['closeAppearance','doneAppearance'])$(id).addEventListener('click',()=>window.borgnetTransitions.closeDialog($('appearanceDialog')));
   function reset(all) {if(all)preferences={};else delete preferences[$('appearanceSection').value];try{localStorage.setItem(key,JSON.stringify(preferences));}catch{}apply();populate();}
   $('resetAppearanceSection').addEventListener('click',()=>reset(false));
   $('resetAppearanceAll').addEventListener('click',()=>reset(true));

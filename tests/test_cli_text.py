@@ -66,3 +66,13 @@ async def test_output_bound_stops_cli(monkeypatch, tmp_path):
     monkeypatch.setattr(cli_text, "LIMIT", 512)
     with pytest.raises(ValueError, match="size limit"):
         await asyncio.wait_for(cli_text.CLIText().chat(item(), [], "", None), 5)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_kills_descendants_after_parent_exits(monkeypatch):
+    import signal
+    from types import SimpleNamespace
+    signals = []
+    monkeypatch.setattr(cli_text.os, 'killpg', lambda pid, sig: signals.append((pid, sig)))
+    await cli_text.stop(SimpleNamespace(pid=123, returncode=0))
+    assert signals == [(123, signal.SIGTERM), (123, signal.SIGKILL)]

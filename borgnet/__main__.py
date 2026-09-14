@@ -10,8 +10,17 @@ def main():
     serve = sub.add_parser("serve", help="Start the local workspace")
     serve.add_argument("--port", type=int, default=7337)
     sub.add_parser("mcp", help="Expose only explicitly shared context over MCP stdio")
+    adapters = sub.add_parser("adapters", help="Install or inspect browser and desktop adapters")
+    adapters.add_argument("action", choices=["install", "status"])
     args = parser.parse_args()
-    if args.command == "mcp":
+    if args.command == "adapters":
+        import json
+        from .adapter_setup import install, status
+        if args.action == "install":
+            install()
+        else:
+            print(json.dumps(status(), indent=2))
+    elif args.command == "mcp":
         from .config import Store
         from .mcp_bridge import shared_server
         shared_server(Store(args.data_dir)).run(transport="stdio")

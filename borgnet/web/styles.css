@@ -65,3 +65,31 @@ body[data-theme=light]{--tab-tint:248,255,251}
 .appearance-colors{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 18px}.appearance-colors input[type=color]{width:100%;height:40px;padding:3px;cursor:pointer}#appearanceOpacity{padding:0;accent-color:var(--accent)}#appearanceOpacityValue{float:right;color:var(--text)}.opacity-labels{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}#appearanceDialog{background:var(--bar);max-width:520px}#appearanceDialog .dialog-footer{flex-wrap:wrap}
 
 #appearanceBlur{padding:0;accent-color:var(--accent)}#appearanceBlurValue{float:right;color:var(--text)}
+
+/* Compact live transcript; expand the summary for the full conference. */
+.conference-bar{display:grid;grid-template-columns:12px minmax(0,1fr);gap:4px 10px;padding:8px 12px}
+.conference-bar:before{grid-column:1;grid-row:1 / 3;align-self:center}
+.conference-heading{grid-column:2;display:flex;align-items:center;gap:12px;min-width:0}
+.conference-heading .conference-models{flex-wrap:nowrap;overflow:hidden;white-space:nowrap;gap:12px}
+.conference-heading .model-status{flex-shrink:0}
+.conference-preview{grid-column:2;height:2.7em;line-height:1.35;font-size:12px;overflow-y:auto;overflow-x:hidden;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text);scrollbar-width:none;pointer-events:none}
+.conference-preview::-webkit-scrollbar{display:none}
+.conference-bar:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
+.permission-row{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:12px 0;border-bottom:1px solid var(--border)}
+.permission-row p{margin:5px 0;max-width:440px}.permission-switch{min-width:60px;border-radius:999px}.permission-switch[aria-checked="true"]{background:var(--accent);color:var(--text)}#permissionsDialog{max-width:640px;width:calc(100vw - 48px)}
+
+.debate-settings{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:8px 0}.debate-settings[hidden]{display:none}.debate-settings label{margin:0}.debate-settings .caption{flex-basis:100%}.compose-settings{flex-wrap:wrap}#debateImplement[aria-checked="true"]{background:var(--accent)}
+
+/* A fixed-width track crosses every intervening screen in 330ms total. */
+.panel-viewport{position:relative;flex:1;min-height:0;overflow:hidden;isolation:isolate}
+.panel-track{position:absolute;inset:0}
+.panel-track>.panel{position:absolute;top:0;width:100%;height:100%;display:block;visibility:hidden}
+.panel-track>.panel.active,.panel-track.sliding>.panel{visibility:visible}
+.panel-track>#conversationPanel{display:flex;flex-direction:column;padding:0}
+.panel-track.sliding{will-change:transform}
+.configuration-dialog::backdrop{animation:configuration-backdrop-in .5s ease-in-out both}
+.configuration-dialog.configuration-closing::backdrop{animation:configuration-backdrop-out .5s ease-in-out both}
+@keyframes configuration-backdrop-in{from{opacity:0}to{opacity:1}}
+@keyframes configuration-backdrop-out{from{opacity:1}to{opacity:0}}
+@media(prefers-reduced-motion:reduce){.configuration-dialog::backdrop{animation:none}}

@@ -11,7 +11,6 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.error
 import urllib.request
 import webbrowser
 
@@ -34,11 +33,13 @@ def main():
         if not (runtime / '.ready').exists():
             print('Setting up BorgNet. First launch requires Internet access to PyPI.', flush=True, file=sys.stderr)
             subprocess.run(['/usr/bin/python3', '-m', 'venv', str(runtime)], check=True, stdout=sys.stderr)
-            subprocess.run([str(python), '-m', 'pip', '--isolated', 'install', '--index-url', 'https://pypi.org/simple', '--upgrade', 'pip>=26.2'], check=True, stdout=sys.stderr)
+            for name in ['requirements-bootstrap.txt', 'requirements.txt']:
+                subprocess.run([str(python), '-m', 'pip', '--isolated', 'install', '--index-url', 'https://pypi.org/simple', '--require-hashes', '--only-binary=:all:', '-r', str(SOURCE / 'source' / name)], check=True, stdout=sys.stderr)
             with tempfile.TemporaryDirectory(prefix='borgnet-install-') as temp:
                 source = Path(temp) / 'source'
                 shutil.copytree(SOURCE / 'source', source)
-                subprocess.run([str(python), '-m', 'pip', '--isolated', 'install', '--index-url', 'https://pypi.org/simple', '--disable-pip-version-check', str(source)], check=True, stdout=sys.stderr)
+                subprocess.run([str(python), '-m', 'pip', '--isolated', 'install', '--index-url', 'https://pypi.org/simple', '--disable-pip-version-check', '--no-deps', '--no-build-isolation', str(source)], check=True, stdout=sys.stderr)
+            subprocess.run([str(python), '-m', 'borgnet', 'adapters', 'install'], check=True, stdout=sys.stderr)
             (runtime / '.ready').touch()
     args = sys.argv[1:]
     if args:
@@ -62,7 +63,7 @@ def main():
                         session = json.loads((data_root / 'browser-session.json').read_text())['token']
                         webbrowser.open('http://127.0.0.1:7337/#session=' + session)
                         return
-            except (OSError, urllib.error.URLError):
+            except (OSError, ValueError, KeyError):
                 time.sleep(0.1)
         print('Browser launch timed out. Check the server messages in this terminal.', flush=True)
 

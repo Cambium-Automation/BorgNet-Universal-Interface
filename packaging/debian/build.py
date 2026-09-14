@@ -29,7 +29,8 @@ def build(output):
     for path in sorted((ROOT / 'borgnet').rglob('*')):
         if path.is_file() and '__pycache__' not in path.parts and path.suffix in {'.py', '.html', '.css', '.js'}:
             files['usr/share/borgnet/source/' + str(path.relative_to(ROOT))] = (path.read_bytes(), 0o644)
-    files['usr/share/borgnet/source/pyproject.toml'] = ((ROOT / 'pyproject.toml').read_bytes(), 0o644)
+    for name in ['pyproject.toml', 'requirements.txt', 'requirements-bootstrap.txt']:
+        files['usr/share/borgnet/source/' + name] = ((ROOT / name).read_bytes(), 0o644)
     digest = hashlib.sha256(b''.join(data for data, _ in files.values())).hexdigest()[:16]
     files['usr/share/borgnet/VERSION'] = ((version + '-' + digest + '\n').encode(), 0o644)
     files['usr/bin/borgnet'] = ((ROOT / 'packaging/debian/launcher.py').read_bytes(), 0o755)
@@ -51,7 +52,7 @@ Section: utils
 Priority: optional
 Architecture: all
 Maintainer: Cambium Automation <noreply@github.com>
-Depends: python3 (>= 3.11), python3-venv, ca-certificates, xdg-utils
+Depends: python3 (>= 3.11), python3-venv, ca-certificates, xdg-utils, libnss3, libnspr4, libatk1.0-0t64 | libatk1.0-0, libatk-bridge2.0-0t64 | libatk-bridge2.0-0, libatspi2.0-0t64 | libatspi2.0-0, libcups2t64 | libcups2, libglib2.0-0t64 | libglib2.0-0, libdbus-1-3, libxcb1, fonts-liberation, libdrm2, libxkbcommon0, libxcomposite1, libxdamage1, libxfixes3, libxrandr2, libgbm1, libpango-1.0-0, libcairo2, libasound2t64 | libasound2, libx11-6, libxext6, libxtst6
 Recommends: openssh-client
 Installed-Size: {(sum(len(data) for data, _ in files.values()) + 1023) // 1024}
 Homepage: https://github.com/Cambium-Automation/BorgNet-Universal-Interface

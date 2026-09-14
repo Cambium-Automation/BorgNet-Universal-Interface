@@ -77,3 +77,10 @@ def test_session_rotates_after_restart(tmp_path):
     app=create_app(tmp_path)
     with RawClient(app,base_url='http://127.0.0.1') as client:
         assert client.get('/api/state',headers={'X-BorgNet-Session':old}).status_code==401
+
+
+def test_unicode_media_credential_is_rejected_without_server_error(tmp_path):
+    app = create_app(tmp_path)
+    with RawClient(app, base_url='http://127.0.0.1') as client:
+        response = client.get('/api/images/imagegen/images/missing', params={'media_token': '非ASCII'})
+        assert response.status_code == 401

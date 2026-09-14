@@ -41,8 +41,15 @@ def test_debian_package(tmp_path):
             checksum, name = line.split('  ', 1)
             assert hashlib.md5(archive.extractfile(entries[name]).read()).hexdigest() == checksum
         assert 'usr/share/borgnet/source/borgnet/web/appearance.js' in entries
+        for name in ['automation.py', 'desktop_adapter.py', 'adapter_setup.py']:
+            assert 'usr/share/borgnet/source/borgnet/' + name in entries
+        for name in ['requirements.txt', 'requirements-bootstrap.txt']:
+            assert 'usr/share/borgnet/source/' + name in entries
         launcher = archive.extractfile(entries['usr/bin/borgnet']).read()
         compile(launcher, 'borgnet', 'exec')
+        assert b'--require-hashes' in launcher and b'--only-binary=:all:' in launcher
+        assert b'--no-build-isolation' in launcher and b'--no-deps' in launcher
+        assert b"'adapters', 'install'" in launcher
         for name in entries:
             assert not name.endswith(('secrets.json', 'config.json', '.gguf', '.icns'))
     # Identical inputs produce identical distributable bytes.

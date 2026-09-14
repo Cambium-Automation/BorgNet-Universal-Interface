@@ -28,3 +28,7 @@ python3 packaging/debian/build.py
 The builder produces `dist/borgnet_0.1.0-1_all.deb`, using the standard Debian ar/tar package format documented at https://manpages.debian.org/bookworm/dpkg-dev/deb.5.en.html. No native Mac code, virtual environments, credentials or model weights are included. This is a first-run online bootstrap package, not an offline dependency bundle. The source hash selects a fresh runtime when packaged application code changes.
 
 Validation on macOS covers package structure, content checksums, launcher syntax and application tests. Installation and desktop integration on a real Debian system still need verification.
+
+Runtime and bootstrap dependency lockfiles are bundled with the package. First launch verifies SHA-256 hashes and installs wheels only; it does not freely resolve dependency ranges. Changed lockfiles change the runtime fingerprint, creating a fresh environment on the next package launch. Unsupported wheel platforms fail setup rather than silently compiling unaudited build dependencies. Rebuild the package after dependency/security updates.
+
+The installer now also sets up interactive Chromium and the local browser/computer-use MCP adapter. First launch downloads the matching Chromium binary. Native Chromium library dependencies are declared in the `.deb`; desktop interaction requires an X11 login session. Wayland desktop control is unavailable. In Permissions, enable Full CLI access and then the specific browser/computer toggle for trusted connections. Installed adapters remain off by default.

@@ -292,6 +292,9 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
                 break
             }
         }
+        // A changed fragment alone is a same-document navigation in WKWebView.
+        launchURL.queryItems = (launchURL.queryItems ?? []).filter { $0.name != "reload" }
+            + [URLQueryItem(name: "reload", value: UUID().uuidString)]
         webView.load(URLRequest(url: launchURL.url!, cachePolicy: .reloadIgnoringLocalCacheData))
     }
 

@@ -67,3 +67,24 @@ def test_cli_image_connection_toggle(tmp_path, monkeypatch):
     app.state.store.write('config', {'connections': [connection]})
     monkeypatch.setenv('BORGNET_GROK_IMAGES', '0')
     assert app.state.image_native.catalog() == []
+
+
+async def test_grok_image_tool_cannot_call_mcp(monkeypatch, tmp_path):
+    import pytest
+    from borgnet.config import Store
+    from borgnet.subscription_images import create_subscription_images
+    store = Store(tmp_path)
+    config = store.config()
+    config['connections'] = [{'kind':'cli','cli_provider':'grok','enabled':True}]
+    store.write('config',config)
+    monkeypatch.delenv('BORGNET_GROK_IMAGES', raising=False)
+    monkeypatch.setattr('borgnet.subscription_images.shutil.which', lambda name: name)
+    calls = []
+    async def capture(*argv, **kwargs):
+        calls.append(argv)
+        raise RuntimeError('test stops before process execution')
+    monkeypatch.setattr('borgnet.subscription_images.asyncio.create_subprocess_exec', capture)
+    with pytest.raises(RuntimeError, match='test stops'):
+        await create_subscription_images(tmp_path,store).generate({'model_id':'signedin::grok','prompt':'test'})
+    assert calls[0][calls[0].index('--deny')+1] == 'MCPTool'
+    assert calls[0][calls[0].index('--tools')+1] == 'image_gen'

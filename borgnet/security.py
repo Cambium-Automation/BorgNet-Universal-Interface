@@ -38,17 +38,17 @@ class LocalBoundary:
         if headers.get('sec-fetch-site') in {'cross-site', 'same-site'}:
             return await reject('Cross-origin access denied', 403)
         path = scope['path']
-        if path.startswith('/api/') or path == '/api/videos':
-            authorized = secrets.compare_digest(headers.get('x-borgnet-session', ''), self.session)
+        if path.startswith('/api/'):
+            authorized = secrets.compare_digest(headers.get('x-borgnet-session', '').encode('utf-8'), self.session.encode('ascii'))
             is_media = scope['method'] in {'GET', 'HEAD'} and (
                 path.startswith('/api/images/imagegen/images/') or
                 (path.startswith('/api/videos/') and path.endswith('/content')))
             if is_media:
-                authorized |= secrets.compare_digest(QueryParams(scope.get('query_string', b'')).get('media_token', ''), self.media)
+                authorized |= secrets.compare_digest(QueryParams(scope.get('query_string', b'')).get('media_token', '').encode('utf-8'), self.media.encode('ascii'))
             if not authorized:
                 return await reject('Open the private launch link printed by borgnet serve to unlock this workspace.', 401)
         if scope['method'] not in {'GET', 'HEAD', 'OPTIONS'}:
-            if not secrets.compare_digest(headers.get('x-borgnet-token', ''), self.token):
+            if not secrets.compare_digest(headers.get('x-borgnet-token', '').encode('utf-8'), self.token.encode('ascii')):
                 return await reject('Refresh this page before making changes', 403)
         if scope['method'] not in {'GET', 'HEAD'}:
             try:
