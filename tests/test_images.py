@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from unittest.mock import patch
-from fastapi.testclient import TestClient
+from tests.client import TestClient
 from borgnet.server import create_app
 
 
@@ -48,3 +48,22 @@ def test_failure_messages(tmp_path):
     assert 'rejected' in api.image_failure({'promptFeedback':{'blockReason':'SAFETY'}},'gemini')
     assert 'quota' in api.image_failure({},'xai',429)
     assert 'rejected' not in api.image_failure({},'openai')
+
+
+def test_cli_image_connection_toggle(tmp_path, monkeypatch):
+    monkeypatch.delenv('BORGNET_GROK_IMAGES', raising=False)
+    monkeypatch.delenv('BORGNET_CODEX_IMAGES', raising=False)
+    monkeypatch.setattr('borgnet.subscription_images.shutil.which', lambda name: '/bin/' + name)
+    app = create_app(tmp_path)
+    connection = {'kind': 'cli', 'cli_provider': 'grok', 'enabled': True}
+    app.state.store.write('config', {'connections': [connection]})
+    assert [m['id'] for m in app.state.image_native.catalog()] == ['signedin::grok']
+    connection['enabled'] = False
+    app.state.store.write('config', {'connections': [connection]})
+    assert app.state.image_native.catalog() == []
+    monkeypatch.setenv('BORGNET_GROK_IMAGES', '1')
+    assert len(app.state.image_native.catalog()) == 1
+    connection['enabled'] = True
+    app.state.store.write('config', {'connections': [connection]})
+    monkeypatch.setenv('BORGNET_GROK_IMAGES', '0')
+    assert app.state.image_native.catalog() == []

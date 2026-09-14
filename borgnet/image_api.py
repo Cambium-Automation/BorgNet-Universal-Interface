@@ -39,9 +39,13 @@ def create_image_api(root, state_store):
     headers={'x-goog-api-key':key} if provider=='gemini' else {'Authorization':'Bearer '+key}
     try:
      async with httpx.AsyncClient(timeout=20,trust_env=False,follow_redirects=False) as c:
-      r=await c.get(p['url']+'/models',headers=headers)
+      async with c.stream('GET',p['url']+'/models',headers=headers) as r:
+       raw=bytearray()
+       async for chunk in r.aiter_bytes():
+        raw.extend(chunk)
+        if len(raw)>2_000_000:raise ValueError('Model catalog too large')
       if r.status_code!=200:raise ValueError(f'Model discovery HTTP {r.status_code}')
-      data=r.json()
+      data=json.loads(raw)
       if provider=='gemini':models=[m['name'].removeprefix('models/') for m in data.get('models',[]) if 'image' in m['name'] and 'generateContent' in m.get('supportedGenerationMethods',[])]
       else:models=[m['id'] for m in data.get('data',[]) if ('gpt-image' if provider=='openai' else 'grok-imagine-image') in m['id']]
       status='Available from API · billed by provider'
@@ -126,4 +130,4 @@ def create_image_api(root, state_store):
    d=await request.json();provider=d.get('provider');key=d.get('api_key','')
    if provider not in PRESETS or not isinstance(key,str) or not key.strip():raise ValueError('Select a provider and enter its API key')
    store.save_secret('image-'+provider,key.strip());return {'saved':True}
- return SimpleNamespace(catalog=catalog,generate=generate,image_path=image_path,register=register,image_failure=image_failure)
+ return SimpleNamespace(credential=credential,catalog=catalog,generate=generate,image_path=image_path,register=register,image_failure=image_failure)

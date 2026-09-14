@@ -11,7 +11,9 @@ def create_subscription_images(root,state_store):
  def catalog():
   models=[]
   for provider,label,program in [('codex','Codex','codex'),('grok','Grok','grok')]:
-   if os.environ.get('BORGNET_'+provider.upper()+'_IMAGES')!='1' or not shutil.which(program):continue
+   flag=os.environ.get('BORGNET_'+provider.upper()+'_IMAGES')
+   connected=any(c.get('kind')=='cli' and c.get('cli_provider')==provider and c.get('enabled',True) for c in store.config().get('connections',[]))
+   if flag=='0' or not (flag=='1' or connected) or not shutil.which(program):continue
    models.append({'id':'signedin::'+provider,'label':label+' · existing sign-in','backend':'signedin','installed':True,'ready':True,'status':'Uses existing CLI sign-in; account access is checked during generation','sizes':['auto'],'default_size':'auto','modes':[['auto','Native image generation']],'min_steps':1,'max_steps':1,'default_steps':1})
   return models
 
@@ -39,14 +41,27 @@ def create_subscription_images(root,state_store):
   async with lock:
    job=ROOT/'image-jobs'/uuid.uuid4().hex;job.mkdir(parents=True,mode=0o700)
    instruction='Use your native image generation tool to create exactly one raster image from the following request. Save or copy the generated image into this working directory. Use the existing ChatGPT sign-in. Do not use API keys, browsers, web search, or substitute procedural drawings. If the native tool is unavailable, stop and report that. Return the absolute saved image path.\n\nIMAGE REQUEST:\n'+prompt
-   argv=[shutil.which('codex'),'exec','--ignore-user-config','--ephemeral','--skip-git-repo-check','--sandbox','workspace-write','-C',str(job),'--json',instruction]
+   argv=[shutil.which('codex'),'exec','--ignore-user-config','--ephemeral','--skip-git-repo-check','--sandbox','workspace-write','--disable','shell_tool','--disable','plugins','-C',str(job),'--json',instruction]
    if identity=='signedin::grok':
     instruction='Use your native image_gen tool to generate exactly one image from this request. Do not use MCP servers, new API keys, or unrelated files. Return the generated image path. IMAGE REQUEST: '+prompt
-    argv=[shutil.which('grok'),'--cwd',str(job),'--output-format','json','--max-turns','4','--no-plan','--no-subagents','--disable-web-search','--sandbox','workspace','--tools','image_gen,read_file','--allow','image_gen','--permission-mode','dontAsk','-p',instruction]
+    argv=[shutil.which('grok'),'--cwd',str(job),'--output-format','json','--max-turns','4','--no-plan','--no-subagents','--disable-web-search','--sandbox','workspace','--tools','image_gen','--allow','image_gen','--permission-mode','dontAsk','-p',instruction]
    start=time.monotonic()
    with (job/'events.jsonl').open('wb') as out,(job/'stderr.log').open('wb') as err:
-    process=await asyncio.create_subprocess_exec(*argv,stdout=out,stderr=err,start_new_session=True)
-    try:await asyncio.wait_for(process.wait(),420)
+    process=await asyncio.create_subprocess_exec(*argv,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,start_new_session=True)
+    async def copy_bounded(stream,destination):
+     size=0
+     while chunk:=await stream.read(65536):
+      size+=len(chunk)
+      if size>2_000_000:raise ValueError('Image CLI logs exceeded the size limit')
+      destination.write(chunk)
+    async def bounded_wait():
+     tasks=[asyncio.create_task(copy_bounded(process.stdout,out)),asyncio.create_task(copy_bounded(process.stderr,err)),asyncio.create_task(process.wait())]
+     try:await asyncio.gather(*tasks)
+     finally:
+      for task in tasks:
+       if not task.done():task.cancel()
+      await asyncio.gather(*tasks,return_exceptions=True)
+    try:await asyncio.wait_for(bounded_wait(),420)
     except BaseException:
      try:os.killpg(process.pid,signal.SIGTERM)
      except ProcessLookupError:pass
@@ -75,6 +90,7 @@ def create_subscription_images(root,state_store):
       for line in updates.read_text().splitlines():inspect(json.loads(line))
     except (ValueError,OSError):pass
    if not paths:raise ValueError(no_image_message((job/'events.jsonl').read_text()))
+   if paths[0].stat().st_size>64_000_000:raise ValueError('Native generator returned an oversized image')
    image=paths[0].read_bytes()
    mime='image/png' if image.startswith(b'\x89PNG\r\n\x1a\n') else 'image/jpeg' if image.startswith(b'\xff\xd8\xff') else 'image/webp' if image[:4]==b'RIFF' and image[8:12]==b'WEBP' else None
    if not mime or len(image)>64_000_000:raise ValueError('Native generator returned an invalid or oversized image')

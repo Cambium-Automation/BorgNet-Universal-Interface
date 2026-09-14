@@ -11,6 +11,11 @@ from mcp.client.streamable_http import streamablehttp_client
 from mcp.server.fastmcp import FastMCP
 
 
+def private_http_client(headers=None, timeout=None, auth=None):
+    return httpx.AsyncClient(headers=headers, timeout=timeout, auth=auth,
+                             follow_redirects=False, trust_env=False)
+
+
 @asynccontextmanager
 async def session(source, store, with_capabilities=False):
     if source.transport == "stdio":
@@ -24,7 +29,7 @@ async def session(source, store, with_capabilities=False):
             raise ValueError("Set the MCP Streamable HTTP endpoint")
         key = store.secret(source)
         transport = streamablehttp_client(source.url, headers={"Authorization": f"Bearer {key}"} if key else None,
-            timeout=timedelta(seconds=30), sse_read_timeout=timedelta(seconds=90))
+            timeout=timedelta(seconds=30), sse_read_timeout=timedelta(seconds=90), httpx_client_factory=private_http_client)
     async with transport as streams:
         async with ClientSession(streams[0], streams[1], read_timeout_seconds=timedelta(seconds=90)) as client:
             initialized = await client.initialize()

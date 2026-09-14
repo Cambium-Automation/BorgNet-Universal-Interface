@@ -1,11 +1,13 @@
 """Small, explicit adapters; model identities always come from the user's endpoint."""
 import asyncio
 import socket
+import json
 from pathlib import Path
 from urllib.parse import urlsplit, quote
 import httpx
 from .config import Connection
 from .cli_text import CLIText, models as cli_models
+from .streaming import listener, stream_request
 
 
 class Tunnels:
@@ -68,6 +70,13 @@ class Providers:
         self.store, self.tunnels, self.transport = store, tunnels, transport
         self.cli = CLIText()
 
+    async def stream_chat(self, item, messages, system='', response_schema=None, on_delta=None):
+        marker = listener.set(on_delta)
+        try:
+            return await self.chat(item, messages, system, response_schema=response_schema)
+        finally:
+            listener.reset(marker)
+
     async def request(self, item, method, path, payload=None, timeout=None):
         base = await self.tunnels.url(item)
         key = self.store.secret(item)
@@ -85,7 +94,14 @@ class Providers:
             headers["Authorization"] = f"Bearer {key}"
         async with httpx.AsyncClient(transport=self.transport, timeout=timeout or item.timeout, follow_redirects=False, trust_env=False) as client:
             try:
-                response = await client.request(method, base + path, json=payload, headers=headers)
+                if listener.get() is not None and method == 'POST' and path != '/api/pull':
+                    return await stream_request(client, item.kind, method, base + path, payload, headers, listener.get())
+                async with client.stream(method, base + path, json=payload, headers=headers) as response:
+                    raw = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        raw.extend(chunk)
+                        if len(raw) > 8_000_000:
+                            raise ValueError('Provider response exceeds the 8 MB limit')
             except httpx.HTTPError:
                 raise ValueError("Endpoint unreachable or timed out; check its URL, service, and tunnel.") from None
             if response.is_error or response.is_redirect:
@@ -102,7 +118,7 @@ class Providers:
                 # Do not reflect upstream bodies: they can contain echoed credentials or private data.
                 raise ValueError(f"Provider returned HTTP {response.status_code}. Check authentication, model support, and service logs.")
             try:
-                return response.json()
+                return json.loads(raw)
             except ValueError:
                 raise ValueError("Provider returned an invalid JSON response") from None
 
@@ -134,7 +150,7 @@ class Providers:
         if not item.model:
             raise ValueError("Select a discovered model or enter a model ID first")
         if item.kind == "cli":
-            return await self.cli.chat(item, messages, system, response_schema)
+            return await self.cli.chat(item, messages, system, response_schema, on_delta=listener.get())
         if item.kind == "ollama":
             data = await self.request(item, "POST", "/api/chat", {"model": item.model, "stream": False,
                 **({"format": response_schema} if response_schema is not None else {}),

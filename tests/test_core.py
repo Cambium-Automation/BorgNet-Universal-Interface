@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from tests.client import TestClient
 from pydantic import ValidationError
 from borgnet.config import Store, Connection, SSH, MCPSource
 from borgnet.providers import Providers, Tunnels
@@ -18,6 +18,8 @@ def fixture_response(request):
         return httpx.Response(200,json={'models':[{'name':'fixture-chat','supportedGenerationMethods':['generateContent']}], 'data':[{'id':'fixture-chat'}]})
     payload=json.loads(request.content)
     if path == '/api/chat':
+        if payload['stream'] is True:
+            return httpx.Response(200,headers={'content-type':'application/x-ndjson'},content=json.dumps({'message':{'content':'Fixture answer'},'done':True})+'\n')
         assert payload['stream'] is False
         return httpx.Response(200,json={'message':{'content':'Fixture answer'}})
     if path.endswith('/chat/completions'):

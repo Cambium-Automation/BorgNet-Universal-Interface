@@ -52,6 +52,7 @@ func focusFrostAlpha(isKeyWindow: Bool) -> CGFloat {
 
 
 final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKScriptMessageHandler {
+    private var workspaceURL: URL?
     private var window: NSWindow!
     private var webView: WKWebView!
     private var glassView: NSView?
@@ -199,10 +200,11 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
 
         let configuredURL = ProcessInfo.processInfo.environment["BORGNET_URL"]
             ?? "http://127.0.0.1:7337/?native=1"
-        guard let url = URL(string: configuredURL) else {
+        guard let url = URL(string: configuredURL), ["127.0.0.1", "localhost", "::1"].contains(url.host ?? ""), ["http", "https"].contains(url.scheme ?? ""), url.user == nil, url.password == nil else {
             fatalError("BORGNET_URL is not a valid URL")
         }
-        webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
+        workspaceURL = url
+        loadAuthenticatedWorkspace()
 
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -236,7 +238,7 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "borgnetBlur", message.frameInfo.isMainFrame,
               let url = message.frameInfo.request.url,
-              ["127.0.0.1", "localhost", "::1"].contains(url.host ?? ""),
+              url.host == workspaceURL?.host, url.port == workspaceURL?.port, url.scheme == workspaceURL?.scheme,
               let body = message.body as? [String: Any] else { return }
         let radius: Double
         if body["reset"] as? Bool == true { radius = 0 }
@@ -275,15 +277,32 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         publishNativeAppearance()
     }
 
+    private func loadAuthenticatedWorkspace() {
+        guard let url = workspaceURL else { return }
+        var launchURL = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let configuredData = ProcessInfo.processInfo.environment["BORGNET_DATA_DIR"]
+        let roots = configuredData.map { [URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)] }
+            ?? [home.appendingPathComponent("Library/Application Support/BorgNet"), home.appendingPathComponent(".borgnet")]
+        for root in roots {
+            if let data = try? Data(contentsOf: root.appendingPathComponent("browser-session.json")),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+               let token = object["token"] {
+                launchURL.fragment = "session=" + token
+                break
+            }
+        }
+        webView.load(URLRequest(url: launchURL.url!, cachePolicy: .reloadIgnoringLocalCacheData))
+    }
+
     @objc private func reloadWorkspace(_ sender: Any?) {
-        webView.reloadFromOrigin()
+        loadAuthenticatedWorkspace()
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = navigationAction.request.url,
-              ["127.0.0.1", "localhost", "::1"].contains(url.host ?? ""),
-              ["http", "https"].contains(url.scheme ?? "") else {
+              url.host == workspaceURL?.host, url.port == workspaceURL?.port, url.scheme == workspaceURL?.scheme else {
             decisionHandler(.cancel)
             return
         }

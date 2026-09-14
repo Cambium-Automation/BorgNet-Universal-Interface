@@ -85,6 +85,10 @@ class Store:
     def __init__(self, root: Path):
         self.root = root.expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if os.name == 'posix':
+            if self.root.stat().st_uid != os.getuid():
+                raise ValueError('Workspace directory must be owned by the current user')
+            self.root.chmod(0o700)
         self.lock = threading.RLock()
 
     def read(self, name, default):

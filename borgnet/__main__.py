@@ -18,7 +18,9 @@ def main():
     else:
         import uvicorn
         from .server import create_app
-        uvicorn.run(create_app(args.data_dir), host="127.0.0.1", port=args.port, access_log=False)
+        app = create_app(args.data_dir)
+        print(f"Open your private workspace: http://127.0.0.1:{args.port}/#session={app.state.session_token}", flush=True)
+        uvicorn.run(app, host="127.0.0.1", port=args.port, access_log=False)
 
 
 if __name__ == "__main__":

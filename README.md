@@ -21,9 +21,13 @@ borgnet serve
 
 On Windows, activate with `.venv\Scripts\Activate.ps1` and use `python` if `python3` is unavailable.
 
-Open **http://127.0.0.1:7337**. Click **Connect**, choose a protocol, enter your endpoint and credentials if needed, then save. Model discovery runs against that endpoint. Choose a model, enter your prompt, and press **Enter**. **Shift+Enter** inserts a new line; IME composition is preserved.
+Open the **private launch link printed by `borgnet serve`**. It unlocks http://127.0.0.1:7337 for this browser tab. Click **Connect**, choose a protocol, enter your endpoint and credentials if needed, then save. Model discovery runs against that endpoint. Choose a model, enter your prompt, and press **Enter**. **Shift+Enter** inserts a new line; IME composition is preserved.
 
 This is a local application. Its web server binds only to loopback. Keep it running while using the browser or native shell.
+
+## Debian installer
+
+A Debian-family desktop package and build instructions are available in [packaging/debian](packaging/debian/README.md). Install the `.deb` with `sudo apt install ./borgnet_0.1.0-1_all.deb`, then run `borgnet` or use the application menu. First launch requires Internet access to set up Python dependencies. The Linux package uses the browser interface; native Apple desktop blur is macOS-only.
 
 ## Connections
 
@@ -64,7 +68,7 @@ Enable the connections you want to use. Enter sends to every enabled connection 
 
 A reviewer receives only its peers’ proposals, with exact required IDs and an Ollama JSON-schema request where supported. A valid review must score every peer exactly once and cannot score itself. Validation remains mandatory even when a provider supports structured output. A decision needs at least two successful proposals and valid reviews from at least half the responders (minimum two). Invalid reviews get one format retry, then abstain. Missing participation is disclosed. Scores guide model judgment; they do not prove correctness. At 50 participants, a successful round makes 50 proposal calls, 50 review calls, and one final decision call before any retries. Each reviewer scores 49 peers, so configure sufficient output tokens and context capacity on the chosen runtimes. The 50-participant path is tested with synthetic providers, not a physical 50-GPU cluster. BorgNet selects and plans work, but does not execute generated code or edits. Choose “Independent answers only” to skip review.
 
-Collaboration allows 12,000 prompt characters, excerpts shared reference data to 24,000 characters and the proposal pool to approximately 18,000 characters, and bounds each provider call by its configured timeout or 600 seconds, whichever is shorter. Completion events stream after full responses, not token by token. Errors are retained in history. Stopping cancels local pending calls; providers may continue already accepted work.
+Collaboration allows 12,000 prompt characters, excerpts shared reference data to 24,000 characters and the proposal pool to approximately 18,000 characters, and bounds each provider call by its configured timeout or 600 seconds, whichever is shorter. Public text streams as it arrives during proposals, peer reviews and the final decision. The conference opens automatically, and completed reviews replace their provisional JSON with validated summaries. Grok and Copilot CLIs and supported HTTP APIs stream live; Codex/Gemini CLI adapters currently return completed messages and are labeled accordingly. Reasoning and tool events are not displayed. Errors are retained in history. Stopping cancels local pending calls; providers may continue already accepted work.
 
 Follow-up prompts include up to eight prior turns for the same connection in the current conversation. **New conversation** starts fresh; **History** resumes a saved conversation. Selected context is attached only when you choose it. Context and prompts are transmitted to the selected providers, including cloud providers. **Stop** cancels local pending requests; a remote provider may continue work or charge for a request it has already accepted.
 
@@ -100,7 +104,7 @@ borgnet --data-dir /path/to/your/workspace serve --port 7337
 
 Use one BorgNet server process per data directory. JSON writes are atomic; concurrent processes writing the same directory are not supported. Back up or delete that directory using your normal file tools. Do not commit it or publish exported user data. Secrets, state, build outputs, and environment files are ignored by Git.
 
-BorgNet is designed for a trusted single-user computer, not as an Internet-facing multi-user service. It rejects foreign Host/Origin requests and requires a per-process request token for writes. It intentionally permits user-configured local endpoints and installed MCP commands. Do not expose the server through a public reverse proxy.
+BorgNet is designed for a trusted single-user computer, not as an Internet-facing multi-user service. It rejects foreign Host/Origin requests and requires a private per-process browser credential for all API reads and writes, plus a separate request token for writes. The launch credential is stored in an owner-only file and passed through a URL fragment, then removed from the address bar; it is never sent in cookies. Media uses a separate read-only credential. It intentionally permits user-configured local endpoints and installed MCP commands. Do not expose the server through a public reverse proxy.
 
 ## Development and verification
 
@@ -119,8 +123,52 @@ See [provider setup](docs/PROVIDERS.md) for local/cloud presets, six supported t
 
 The Image generation tab supports OpenAI, Gemini, and xAI image APIs. Configure a provider in the tab, set its `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `XAI_API_KEY` environment variable, or reuse a chat connection whose URL exactly matches the provider's official API base URL. Model discovery runs when you open the image tab. Catalog entries without credentials remain unavailable; discovery does not guarantee quota or model access.
 
-For native image tools through an already authenticated CLI, install `codex` or `grok` on your PATH and explicitly enable `BORGNET_CODEX_IMAGES=1` or `BORGNET_GROK_IMAGES=1` in the environment used to launch BorgNet. These modes use the existing CLI sign-in without an additional image API key. CLI versions must support their native image tools; account usage limits still apply. Codex uses its CLI default model. No CLI connection is enabled or contacted by default.
+For native image tools through an already authenticated CLI, install `codex` or `grok` on your PATH and enable its CLI connection in BorgNet. The connection toggle also controls image availability. Alternatively set `BORGNET_CODEX_IMAGES=1` or `BORGNET_GROK_IMAGES=1` in the launch environment; a value of `0` explicitly disables that image adapter. These modes use the existing CLI sign-in without an additional image API key. CLI versions must support their native image tools; account usage limits still apply. Codex uses its CLI default model. No CLI connection is enabled or contacted by default.
 
 Generated images remain in your local state directory. Each gallery item and enlarged image has **Save to Downloads** and **Delete** controls. Saving exports the original PNG, JPEG, or WebP on the computer running BorgNet with a collision-safe filename. Deletion removes the image from the active gallery and retains it under **Recently deleted**, with **Restore** available; it does not erase image bytes or export copies. Provider rejections and quota errors are displayed separately.
 
 Native generation runs in a separate job directory with a bounded timeout. Public assistant failure messages may be shown; private reasoning and raw tool transcripts are not displayed. Job logs remain local. This release does not include machine-specific image runtimes or private security specialist interfaces.
+
+
+### Video generation
+
+The **Video generation** tab supports text-to-video through xAI Grok Imagine,
+Google Veo 3.1 and OpenAI Sora 2 APIs. It reuses the matching official-provider
+chat/image API key or `XAI_API_KEY`, `GEMINI_API_KEY`, or `OPENAI_API_KEY`.
+**Connect provider API** opens the shared credential form. CLI subscription
+sign-in does not provide video API credentials. Keys being present does not
+prove model access or quota; video is billed by the provider.
+
+Choose a model, duration and format, then generate. This initial implementation
+uses 720p and accepts one pending job at a time. Job IDs persist in private
+`video-jobs.json`; reloading resumes polling without creating another video.
+Keep the page open to poll and download completed clips promptly: provider
+URLs expire. Closing the page does not cancel generation or provider charges.
+An interrupted submission is marked uncertain rather than automatically retried;
+check provider history before submitting again. Completed MP4s (up to 256 MB)
+are stored privately in `api-videos`, with inline playback and Download MP4.
+This release supports text prompts; image references, editing and extensions
+are not yet wired in. No video model weights or extra SDKs are installed.
+
+Adapters follow the official [xAI video API](https://docs.x.ai/developers/model-capabilities/video/generation),
+[Google Veo API](https://ai.google.dev/gemini-api/docs/veo), and
+[OpenAI video API](https://developers.openai.com/api/reference/resources/videos).
+Tests cover synthetic provider submission, completion, persistence, download,
+credential isolation and failure. Live video generation still requires an
+account with video API access.
+
+
+### Security review
+
+See [SECURITY.md](SECURITY.md) for the threat model, hardening, validation and
+remaining boundaries. Use the private launch link after server restarts; the
+native macOS app and Debian launcher read it automatically on launch. Do not
+share launch links, browser session storage, or `browser-session.json`.
+
+
+For checkout-based MCP clients, `scripts/shared_context_mcp.py --data-dir PATH mcp`
+provides the same read-only shared-context server without relying on an editable
+Python installation. Launch it with the checkout virtualenv Python. Configure it
+as a stdio MCP source; it starts on demand, so no additional network port is opened.
+Only entries marked **Share via MCP** are listed/read. An empty shared index is expected
+until you explicitly share an item.

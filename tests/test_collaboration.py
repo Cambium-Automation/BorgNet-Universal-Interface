@@ -91,7 +91,7 @@ async def test_invalid_coordinator_retries_with_another_participant():
 
 
 def test_api_defaults_to_collaboration_and_preserves_final_in_history(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
+    from tests.client import TestClient
     from borgnet.server import create_app
     app = create_app(tmp_path)
     fixture = CouncilFixture()
@@ -116,7 +116,7 @@ def test_api_defaults_to_collaboration_and_preserves_final_in_history(tmp_path, 
 
 
 def test_fifty_connections_dispatch_review_and_capacity_boundary(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
+    from tests.client import TestClient
     from borgnet.server import create_app
     app = create_app(tmp_path)
     fixture = CouncilFixture()

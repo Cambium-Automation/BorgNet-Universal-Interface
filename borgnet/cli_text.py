@@ -1,6 +1,7 @@
 """Text-only connections using an installed CLI's existing sign-in."""
 import asyncio
 import json
+import codecs
 import os
 from pathlib import Path
 import shutil
@@ -39,7 +40,7 @@ def command(item, job, prompt):
         path.write_text(prompt)
         argv += ["--output-format", "json", "--max-turns", "1", "--no-plan",
                  "--no-subagents", "--disable-web-search", "--tools", "",
-                 "--permission-mode", "dontAsk", *model, "--prompt-file", str(path)]
+                 "--permission-mode", "dontAsk", "--deny", "MCPTool", *model, "--prompt-file", str(path)]
         if item.cli_agent:
             argv += ["--agent", item.cli_agent]
     elif provider == "gemini":
@@ -106,7 +107,7 @@ class CLIText:
     def __init__(self):
         self.locks = {}
 
-    async def chat(self, item, messages, system, response_schema):
+    async def chat(self, item, messages, system, response_schema, on_delta=None):
         prompt = "Answer the supplied conversation as a text-only BorgNet participant. Do not use tools.\n"
         prompt += json.dumps({"system": system, "messages": messages}, ensure_ascii=False)
         if response_schema is not None:
@@ -117,6 +118,44 @@ class CLIText:
             with tempfile.TemporaryDirectory(prefix="borgnet-cli-") as directory:
                 job = Path(directory)
                 argv, data = command(item, job, prompt)
+                streaming = on_delta is not None and item.cli_provider in {'grok', 'copilot'}
+                if streaming and item.cli_provider == 'grok':
+                    argv[argv.index('--output-format') + 1] = 'streaming-json'
+                elif streaming:
+                    argv += ['--stream', 'on']
+                public = []
+                async def read_public(stream):
+                    size, pending = 0, ''
+                    decoder = codecs.getincrementaldecoder('utf-8')()
+                    async def line(text):
+                        if not text.strip(): return
+                        try: event = json.loads(text)
+                        except ValueError: raise ValueError('CLI returned invalid stream JSON') from None
+                        if event.get('type') == 'error': raise ValueError('CLI stream failed; check sign-in and quota')
+                        if event.get('type') == 'text' and isinstance(event.get('data'), str):
+                            public.append(event['data'])
+                            await on_delta(event['data'])
+                    while chunk := await stream.read(4096):
+                        size += len(chunk)
+                        if size > LIMIT: raise ValueError('CLI output exceeded the size limit')
+                        decoded = decoder.decode(chunk)
+                        if item.cli_provider == 'copilot':
+                            if decoded:
+                                public.append(decoded)
+                                await on_delta(decoded)
+                        else:
+                            pending += decoded
+                            while '\n' in pending:
+                                value, pending = pending.split('\n', 1)
+                                await line(value)
+                    tail = decoder.decode(b'', final=True)
+                    if item.cli_provider == 'grok':
+                        await line(pending + tail)
+                    elif tail:
+                        public.append(tail)
+                        await on_delta(tail)
+                    return b''
+
                 process = await asyncio.create_subprocess_exec(*argv, cwd=job,
                     stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE, start_new_session=True)
@@ -130,7 +169,7 @@ class CLIText:
                         finally:
                             process.stdin.close()
                     tasks = [asyncio.create_task(coro) for coro in (
-                        bounded_read(process.stdout), bounded_read(process.stderr), write(), process.wait())]
+                        (read_public(process.stdout) if streaming else bounded_read(process.stdout)), bounded_read(process.stderr), write(), process.wait())]
                     try:
                         return await asyncio.gather(*tasks)
                     finally:
@@ -142,7 +181,14 @@ class CLIText:
                     output, _, _, code = await asyncio.wait_for(exchange(), item.timeout)
                     if code:
                         raise ValueError(f"{NAMES[item.cli_provider]} CLI exited with code {code}; open `{item.cli_provider}` in your terminal to check sign-in, model access, or usage limits")
-                    return answer(item.cli_provider, output, job)
+                    if streaming:
+                        text = ''.join(public).strip()
+                        if not text: raise ValueError('CLI returned no public text')
+                        return text
+                    text = answer(item.cli_provider, output, job)
+                    if on_delta is not None:
+                        await on_delta(text)
+                    return text
                 except TimeoutError:
                     raise ValueError(f"{NAMES[item.cli_provider]} CLI timed out") from None
                 finally:

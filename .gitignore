@@ -28,3 +28,9 @@ image-jobs/
 api-image-history.json
 image-library-deleted.json
 image-models-*.json
+
+# Video generation artifacts
+api-videos/
+video-jobs.json
+
+browser-session.json
