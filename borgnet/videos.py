@@ -11,6 +11,7 @@ import httpx
 from fastapi import Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from .image_api import create_image_api
+from .media_responses import public_response, ProviderResponseError
 
 PROVIDERS = {
     'xai': {'base': 'https://api.x.ai/v1', 'models': ['grok-imagine-video-1.5'], 'durations': [5, 10, 15], 'sizes': ['16:9', '9:16', '1:1']},
@@ -59,16 +60,23 @@ class Videos:
 
     async def json_request(self, client, method, url, **kwargs):
         async with client.stream(method, url, **kwargs) as response:
-            if not response.is_success:
-                reason = {401: 'API key rejected', 403: 'Account lacks access', 429: 'Quota or rate limit reached'}.get(response.status_code, 'Provider request failed')
-                raise ValueError(f'{reason} (HTTP {response.status_code}). Check provider access and billing.')
             data = bytearray()
             async for chunk in response.aiter_bytes():
                 data.extend(chunk)
                 if len(data) > 2_000_000:
                     raise ValueError('Video status response too large')
         import json
-        return json.loads(data)
+        result = json.loads(data)
+        auth = kwargs.get('headers', {})
+        keys = [value.removeprefix('Bearer ') for name, value in auth.items() if name.lower() in {'authorization', 'x-goog-api-key'}]
+        reply = public_response(result, keys)
+        if not response.is_success:
+            reason = {401: 'API key rejected', 403: 'Account lacks access', 429: 'Quota or rate limit reached'}.get(response.status_code, 'Provider request failed')
+            raise ProviderResponseError(f'{reason} (HTTP {response.status_code}).', reply, response.status_code)
+        if not isinstance(result, dict):
+            raise ValueError('Provider returned an invalid video response')
+        result['_borgnet_reply'] = reply
+        return result
 
     async def create(self, body):
         model = next((m for m in self.catalog() if m['id'] == body.get('model_id')), None)
@@ -92,20 +100,27 @@ class Videos:
                     if provider == 'gemini':
                         result = await self.json_request(client, 'POST', base + '/models/' + name + ':predictLongRunning', headers=headers,
                             json={'instances': [{'prompt': prompt}], 'parameters': {'durationSeconds': duration, 'aspectRatio': size, 'resolution': '720p'}})
+                        job['provider_responses'] = [result['_borgnet_reply']]
                         remote = result.get('name', '')
                         if not re.fullmatch(r'models/[\w.-]+/operations/[\w.-]+|operations/[\w.-]+', remote):
                             raise ValueError('Provider returned an invalid operation ID')
                     elif provider == 'xai':
                         result = await self.json_request(client, 'POST', base + '/videos/generations', headers=headers,
                             json={'model': name, 'prompt': prompt, 'duration': duration, 'aspect_ratio': size, 'resolution': '720p'})
+                        job['provider_responses'] = [result['_borgnet_reply']]
                         remote = result.get('request_id', '')
                     else:
                         result = await self.json_request(client, 'POST', base + '/videos', headers=headers,
                             files={k: (None, str(v)) for k, v in {'model': name, 'prompt': prompt, 'seconds': duration, 'size': size}.items()})
+                        job['provider_responses'] = [result['_borgnet_reply']]
                         remote = result.get('id', '')
                     if provider != 'gemini' and not re.fullmatch(r'[\w-]{1,200}', remote):
                         raise ValueError('Provider returned an invalid video ID')
-                job.update(remote_id=remote, status='pending')
+                job.update(remote_id=remote, status='pending', provider_responses=[result['_borgnet_reply']])
+            except ProviderResponseError as error:
+                job.update(status='failed' if error.status and 400 <= error.status < 500 else 'unknown', error=str(error), provider_responses=[error.reply])
+                self.save(job)
+                raise
             except Exception:
                 job.update(status='unknown', error='Submission could not be confirmed. Check provider history before generating again; it may have accepted the request.')
                 self.save(job)
@@ -167,6 +182,12 @@ class Videos:
                 async with self.client() as client:
                     url = base + ('/' + remote if provider == 'gemini' else '/videos/' + quote(remote, safe=''))
                     result = await self.json_request(client, 'GET', url, headers=headers)
+                    reply = result['_borgnet_reply']
+                    if reply not in job.setdefault('provider_responses', []):
+                        if len(job['provider_responses']) < 16:
+                            job['provider_responses'].append(reply)
+                        else:
+                            job['provider_responses'][-1]['truncated'] = True
                     status = result.get('status', '')
                     if result.get('error') or status in {'failed', 'expired'}:
                         job.update(status='failed', error='Provider could not generate this video. Check its content policy, account access and quota.')
@@ -189,6 +210,10 @@ class Videos:
                         if isinstance(progress, (int, float)):
                             job['progress'] = max(0, min(100, progress))
                         job.pop('warning', None)
+            except ProviderResponseError as error:
+                if error.reply not in job.setdefault('provider_responses', []) and len(job['provider_responses']) < 16:
+                    job['provider_responses'].append(error.reply)
+                job['warning'] = str(error) + ' No new generation was submitted.'
             except (httpx.HTTPError, ValueError, OSError):
                 job['warning'] = 'Could not retrieve video status or download. Automatic checks will retry; no new generation is submitted.'
             self.save(job)

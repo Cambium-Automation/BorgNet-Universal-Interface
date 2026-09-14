@@ -4,6 +4,7 @@ from pathlib import Path
 from datetime import datetime,timezone
 from types import SimpleNamespace
 from .cli_text import stop
+from .media_responses import capture
 
 def create_subscription_images(root,state_store):
  ROOT=Path(root)
@@ -65,6 +66,17 @@ def create_subscription_images(root,state_store):
     try:await asyncio.wait_for(bounded_wait(),420)
     finally:
      await stop(process)
+     out.flush()
+     public_output=(job/'events.jsonl').read_text(errors='replace')
+     for line in [public_output, *public_output.splitlines()]:
+      try:
+       event=json.loads(line)
+       if not isinstance(event,dict):continue
+       item=event.get('item') or {}
+       if not isinstance(item,dict):item={}
+       if event.get('type')=='item.completed' and item.get('type')=='agent_message':capture({'message':item.get('text','')})
+       elif 'sessionId' in event and isinstance(event.get('text'),str):capture({'message':event['text']})
+      except (ValueError,TypeError):pass
    paths=[p for p in job.rglob('*') if p.suffix.lower() in {'.png','.jpg','.jpeg','.webp'} and not p.is_symlink() and p.is_file() and p.resolve().is_relative_to(job.resolve())]
    if identity=='signedin::grok':
     try:

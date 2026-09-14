@@ -88,3 +88,23 @@ async def test_grok_image_tool_cannot_call_mcp(monkeypatch, tmp_path):
         await create_subscription_images(tmp_path,store).generate({'model_id':'signedin::grok','prompt':'test'})
     assert calls[0][calls[0].index('--deny')+1] == 'MCPTool'
     assert calls[0][calls[0].index('--tools')+1] == 'image_gen'
+
+
+def test_clear_image_history_requires_confirmation_and_stays_in_library(tmp_path):
+    app=create_app(tmp_path/'state')
+    identity='20260914-010000-abcdef01'
+    library=tmp_path/'state'/'api-images';library.mkdir()
+    image=library/identity;image.write_bytes(b'\x89PNG\r\n\x1a\nfixture')
+    outside=tmp_path/'keep.txt';outside.write_text('keep')
+    symlink_id='20260914-010000-abcdef02';(library/symlink_id).symlink_to(outside)
+    app.state.store.write('api-image-history',[{'id':identity},{'id':symlink_id},{'id':'../../keep.txt'}])
+    app.state.store.write('image-library-deleted',[identity])
+    with TestClient(app) as client:
+        route='/api/images/imagegen/clear-history'
+        assert client.post(route,json={'confirm':True}).status_code==403
+        client.headers['X-BorgNet-Token']=client.get('/api/state').json()['token']
+        assert client.post(route,json={}).status_code==400
+        assert image.exists()
+        assert client.post(route,json={'confirm':True}).status_code==200
+        assert not image.exists() and outside.read_text()=='keep'
+        assert client.get('/api/images/imagegen/history').json()=={'images':[],'trash':[]}

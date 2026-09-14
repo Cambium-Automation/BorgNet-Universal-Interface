@@ -143,11 +143,18 @@ class Providers:
         if item.kind == "gemini":
             return sorted({m["name"].removeprefix("models/") for m in data.get("models", [])
                            if "generateContent" in m.get("supportedGenerationMethods", [])})
-        return sorted({m["id"] for m in data.get("data", [])})
+        names = {m["id"] for m in data.get("data", [])}
+        if item.url == 'https://openrouter.ai/api/v1' and item.options.get('free_only'):
+            names = {name for name in names if name.endswith(':free') or name == 'openrouter/free'}
+            names.add('openrouter/free')
+        return sorted(names)
 
     async def chat(self, item, messages, system="", response_schema=None):
         if not item.model:
             raise ValueError("Select a discovered model or enter a model ID first")
+        if item.url == 'https://openrouter.ai/api/v1' and item.options.get('free_only'):
+            if item.model != 'openrouter/free' and not item.model.endswith(':free'):
+                raise ValueError('This OpenRouter connection is restricted to free models. Choose openrouter/free or a :free model.')
         if item.kind == "cli":
             from .permissions import effective
             return await self.cli.chat(item, messages, system, response_schema, on_delta=listener.get(), policy=effective(self.store, item))

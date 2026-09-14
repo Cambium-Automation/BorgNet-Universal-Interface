@@ -1,5 +1,9 @@
 """Local image library: generation, export, and recoverable deletion."""
 from pathlib import Path
+import uuid
+from datetime import datetime, timezone
+import httpx
+from .media_responses import responses, redact
 from fastapi import Request
 from fastapi.responses import FileResponse, JSONResponse
 from .image_api import create_image_api
@@ -7,6 +11,7 @@ from .subscription_images import create_subscription_images
 
 
 def register_images(app, root, store):
+    generating = 0
     api = create_image_api(root, store)
     native = create_subscription_images(root, store)
     api.register(app)
@@ -34,7 +39,60 @@ def register_images(app, root, store):
     async def generate(request: Request):
         body = await request.json()
         adapter = native if str(body.get('model_id', '')).startswith('signedin::') else api
-        return JSONResponse(await adapter.generate(body), 201)
+        nonlocal generating
+        generating += 1
+        replies = []
+        marker = responses.set(replies)
+        def sanitized_replies():
+            secrets = store.read('secrets', {}).values()
+            return [{**reply, 'messages': [redact(x, secrets) for x in reply['messages']],
+                     'codes': [redact(x, secrets) for x in reply['codes']]} for reply in replies]
+        try:
+            result = await adapter.generate(body)
+            replies[:] = sanitized_replies()
+            result['provider_responses'] = replies
+            result['status'] = 'completed'
+            with store.lock:
+                history = store.read('api-image-history', [])
+                for entry in history:
+                    if entry.get('id') == result['id']:
+                        entry.update(provider_responses=replies, status='completed')
+                store.write('api-image-history', history)
+            return JSONResponse(result, 201)
+        except (ValueError, httpx.HTTPError, TimeoutError, OSError) as error:
+            replies[:] = sanitized_replies()
+            # Preserve failed attempts alongside successful images, not just in a toast.
+            message = str(error) if isinstance(error, ValueError) else 'Provider connection failed or timed out.'
+            message = redact(message, store.read('secrets', {}).values())[:32768]
+            entry = {'id': datetime.now().strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:8],
+                     'created_at': datetime.now(timezone.utc).isoformat(), 'status': 'failed',
+                     'model_id': str(body.get('model_id', ''))[:400], 'prompt': str(body.get('prompt', ''))[:4000],
+                     'error': message, 'provider_responses': replies}
+            with store.lock:
+                history = store.read('api-image-history', [])
+                history.append(entry)
+                store.write('api-image-history', history)
+            return JSONResponse({'error': message, 'history_id': entry['id']}, 400)
+        finally:
+            responses.reset(marker)
+            generating -= 1
+
+    @app.post('/api/images/imagegen/clear-history')
+    async def clear_history(request: Request):
+        body = await request.json()
+        if body.get('confirm') is not True:
+            raise ValueError('Confirm permanent removal of image history first.')
+        if generating:
+            raise ValueError('Wait for image generation to finish before clearing history.')
+        with store.lock:
+            history = store.read('api-image-history', [])
+            for item in history:
+                path = api.image_path(str(item.get('id', '')))
+                if path:
+                    path.unlink(missing_ok=True)
+            store.write('api-image-history', [])
+            store.write('image-library-deleted', [])
+        return {'ok': True, 'message': 'Image history cleared. Copies saved to Downloads are unchanged.'}
 
     @app.post('/api/images/imagegen/library')
     async def library(request: Request):
@@ -43,7 +101,7 @@ def register_images(app, root, store):
         if action not in {'save', 'delete', 'restore'}:
             raise ValueError('Invalid image action')
         path = api.image_path(identity)
-        if not path:
+        if not path and (action == 'save' or not any(item.get('id') == identity for item in store.read('api-image-history', []))):
             return JSONResponse({'error': 'Image not found'}, 404)
         if action == 'save':
             _, extension = image_type(path)

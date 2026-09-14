@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import httpx
 from fastapi import Request
 from borgnet.config import Connection
+from .media_responses import capture
 
 def create_image_api(root, state_store):
  ROOT=Path(root)
@@ -14,6 +15,9 @@ def create_image_api(root, state_store):
  PRESETS={
   'openai':{'url':'https://api.openai.com/v1','env':'OPENAI_API_KEY','models':['gpt-image-2.5-sunburst','gpt-image-2.5-flare']},
   'gemini':{'url':'https://generativelanguage.googleapis.com/v1beta','env':'GEMINI_API_KEY','models':['gemini-3.1-flash-image','gemini-3-pro-image','gemini-2.5-flash-image']},
+  'openrouter':{'url':'https://openrouter.ai/api/v1','env':'OPENROUTER_API_KEY','models':[]},
+  'horde':{'url':'https://aihorde.net/api/v2','env':'AI_HORDE_API_KEY','models':['auto']},
+  'pollinations':{'url':'https://gen.pollinations.ai/v1','env':'POLLINATIONS_API_KEY','models':[]},
   'xai':{'url':'https://api.x.ai/v1','env':'XAI_API_KEY','models':['grok-imagine-image-2.0']},
  }
  def credential(provider):
@@ -24,34 +28,60 @@ def create_image_api(root, state_store):
     if entry.get('url','').rstrip('/')==p['url']:
      key=store.secret(Connection(**entry))
      if key:break
-  return key
+  return key or ('0000000000' if provider=='horde' else '')
 
  def profile(provider,model,has_key,status):
   sizes=['auto','1024x1024','1536x1024','1024x1536'] if provider=='openai' else ['auto','1:1','16:9','9:16','4:3','3:4']
   modes=[['auto','Automatic'],['low','Low quality'],['medium','Medium quality'],['high','High quality']] if provider=='openai' else [['auto','Automatic']]
+  if provider=='pollinations':sizes=['auto']
+  if provider=='openrouter':
+   capabilities=store.read('image-capabilities-openrouter',{}).get(model,{})
+   ratios=capabilities.get('aspect_ratio',{}).get('values',[])
+   qualities=capabilities.get('quality',{}).get('values',[])
+   sizes=['auto']+[v for v in ratios if isinstance(v,str) and v!='auto']
+   modes=[['auto','Automatic']]+[[v,v.title()] for v in qualities if isinstance(v,str) and v!='auto']
   if provider=='xai':modes += [['low','Low quality'],['medium','Medium quality']]
   return {'id':f'api::{provider}::{model}','model':model,'provider':provider,'label':f'{provider.title()} · {model}','backend':'api','installed':has_key,'ready':has_key,'status':status,'sizes':sizes,'default_size':'auto','modes':modes,'min_steps':1,'max_steps':1,'default_steps':1}
 
  async def catalog():
   async def one(provider,p):
    key=await asyncio.to_thread(credential,provider);models=p['models'];status='API key required'
+   if provider=='horde':
+    models=['auto']
+    try:
+     from .horde_images import read_json
+     async with httpx.AsyncClient(timeout=15,trust_env=False,follow_redirects=False) as c:
+      data=await read_json(c,'GET','/status/models?type=image')
+     models += sorted({m['name'] for m in data if isinstance(m,dict) and isinstance(m.get('name'),str) and m.get('count',0)>0})[:200]
+     store.write('image-models-horde',models)
+    except (httpx.HTTPError,ValueError,TypeError):
+     models=store.read('image-models-horde',['auto'])
+    status='Free community queue · workers can see prompts/images · '+('anonymous images shared for dataset use' if key=='0000000000' else 'account key · unshared results requested')
+    return [profile(provider,m,True,status) for m in models]
    if key:
     headers={'x-goog-api-key':key} if provider=='gemini' else {'Authorization':'Bearer '+key}
     try:
      async with httpx.AsyncClient(timeout=20,trust_env=False,follow_redirects=False) as c:
-      async with c.stream('GET',p['url']+'/models',headers=headers) as r:
+      async with c.stream('GET',('https://gen.pollinations.ai/image/models' if provider=='pollinations' else p['url']+('/images/models' if provider=='openrouter' else '/models')),headers=headers) as r:
        raw=bytearray()
        async for chunk in r.aiter_bytes():
         raw.extend(chunk)
         if len(raw)>2_000_000:raise ValueError('Model catalog too large')
       if r.status_code!=200:raise ValueError(f'Model discovery HTTP {r.status_code}')
       data=json.loads(raw)
-      if provider=='gemini':models=[m['name'].removeprefix('models/') for m in data.get('models',[]) if 'image' in m['name'] and 'generateContent' in m.get('supportedGenerationMethods',[])]
+      if provider=='pollinations':models=[m['name'] for m in data if isinstance(m,dict) and m.get('name') and not m.get('paid_only',m.get('paidOnly',False))]
+      elif provider=='openrouter':
+       entries=[m for m in data.get('data',[]) if isinstance(m.get('id'),str) and 'image' in m.get('architecture',{}).get('output_modalities',[])]
+       models=[m['id'] for m in entries]
+       store.write('image-capabilities-openrouter',{m['id']:m.get('supported_parameters',{}) for m in entries})
+      elif provider=='gemini':models=[m['name'].removeprefix('models/') for m in data.get('models',[]) if 'image' in m['name'] and 'generateContent' in m.get('supportedGenerationMethods',[])]
       else:models=[m['id'] for m in data.get('data',[]) if ('gpt-image' if provider=='openai' else 'grok-imagine-image') in m['id']]
-      status='Available from API · billed by provider'
+      status='Uses Pollen allowance/credits · check account balance; free usage is not guaranteed' if provider=='pollinations' else 'Available from API · billed by provider'
       store.write('image-models-'+provider,models)
     except Exception:
      models=store.read('image-models-'+provider,models);status='Discovery unavailable · saved/catalog model · access unverified'
+   if provider in {'pollinations','openrouter'} and not models:
+    return [profile(provider,'discover',False,f'Add a {provider.title()} key and refresh to discover available image models')]
    return [profile(provider,m,bool(key),status) for m in models]
   return [m for group in await asyncio.gather(*(one(k,v) for k,v in PRESETS.items())) for m in group]
 
@@ -86,31 +116,37 @@ def create_image_api(root, state_store):
   p=profile(provider,model,True,'');
   if size not in p['sizes'] or mode not in dict(p['modes']):raise ValueError('Unsupported size or quality for this provider')
   if body.get('negative_prompt'):prompt+='\nAvoid: '+str(body['negative_prompt'])[:2000]
-  if provider=='gemini':
-   path='/models/'+quote(model,safe='')+':generateContent';headers={'x-goog-api-key':key}
-   payload={'contents':[{'role':'user','parts':[{'text':prompt}]}],'generationConfig':{'responseModalities':['TEXT','IMAGE']}}
-   if size!='auto':payload['generationConfig']['imageConfig']={'aspectRatio':size}
-  else:
-   path='/images/generations';headers={'Authorization':'Bearer '+key};payload={'model':model,'prompt':prompt,'n':1}
-   if provider=='openai':payload.update(size=size,quality=mode,output_format='png')
-   else:
-    payload['response_format']='b64_json'
-    if size!='auto':payload['aspect_ratio']=size
-    if mode!='auto':payload['quality']=mode
   start=time.monotonic()
-  async with httpx.AsyncClient(timeout=240,trust_env=False,follow_redirects=False) as c:
-   async with c.stream('POST',PRESETS[provider]['url']+path,headers=headers,json=payload) as r:
-    raw=bytearray()
-    async for chunk in r.aiter_bytes():
-     raw.extend(chunk)
-     if len(raw)>90_000_000:raise ValueError('Image API response too large')
-   data=json.loads(raw)
-   if r.status_code!=200:raise ValueError(image_failure(data,provider,r.status_code))
-  if provider=='gemini':
-   candidates=data.get('candidates',[])
-   blocks=candidates[0].get('content',{}).get('parts',[]) if candidates else []
-   encoded=next((b['inlineData']['data'] for b in blocks if not b.get('thought') and b.get('inlineData',{}).get('mimeType','').startswith('image/')),None)
-  else:encoded=(data.get('data') or [{}])[0].get('b64_json')
+  if provider=='horde':
+   from .horde_images import generate as horde_generate
+   encoded=await horde_generate(model,prompt,size,key)
+   data={}
+  else:
+   if provider=='gemini':
+    path='/models/'+quote(model,safe='')+':generateContent';headers={'x-goog-api-key':key}
+    payload={'contents':[{'role':'user','parts':[{'text':prompt}]}],'generationConfig':{'responseModalities':['TEXT','IMAGE']}}
+    if size!='auto':payload['generationConfig']['imageConfig']={'aspectRatio':size}
+   else:
+    path='/images' if provider=='openrouter' else '/images/generations';headers={'Authorization':'Bearer '+key};payload={'model':model,'prompt':prompt,'n':1}
+    if provider=='openai':payload.update(size=size,quality=mode,output_format='png')
+    else:
+     if provider!='openrouter':payload['response_format']='b64_json'
+     if size!='auto':payload['aspect_ratio']=size
+     if mode!='auto':payload['quality']=mode
+   async with httpx.AsyncClient(timeout=240,trust_env=False,follow_redirects=False) as c:
+    async with c.stream('POST',PRESETS[provider]['url']+path,headers=headers,json=payload) as r:
+     raw=bytearray()
+     async for chunk in r.aiter_bytes():
+      raw.extend(chunk)
+      if len(raw)>90_000_000:raise ValueError('Image API response too large')
+    data=json.loads(raw)
+    capture(data,[key])
+    if r.status_code!=200:raise ValueError(image_failure(data,provider,r.status_code))
+   if provider=='gemini':
+    candidates=data.get('candidates',[])
+    blocks=candidates[0].get('content',{}).get('parts',[]) if candidates else []
+    encoded=next((b['inlineData']['data'] for b in blocks if not b.get('thought') and b.get('inlineData',{}).get('mimeType','').startswith('image/')),None)
+   else:encoded=(data.get('data') or [{}])[0].get('b64_json')
   if not encoded:raise ValueError(image_failure(data,provider))
   image=base64.b64decode(encoded,validate=True)
   if not image or len(image)>64_000_000:raise ValueError('Invalid image size')

@@ -25,3 +25,6 @@ jobs:
       - run: for file in borgnet/web/*.js; do node --check "$file"; done
       - run: node tests/keyboard.cjs
       - run: node tests/model-options.cjs
+      - run: node tests/image-feed.cjs
+      - run: node tests/openrouter-import.cjs
+      - run: node tests/media-responses.cjs

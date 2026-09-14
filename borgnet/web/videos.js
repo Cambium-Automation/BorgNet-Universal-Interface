@@ -47,6 +47,7 @@
         const video = make('video'); video.controls = true; video.preload = 'metadata'; video.src = window.borgnetMediaURL(job.url); video.className = 'local-image'; card.append(video);
         const link = make('a', 'Download MP4'); link.href = window.borgnetMediaURL(job.url + '?download=true'); link.download = 'BorgNet-' + job.id + '.mp4'; card.append(link);
       }
+      card.append(window.borgnetProviderResponses(job));
       const previous = cards.get(job.id); if (previous) previous.node.replaceWith(card); else library.prepend(card);
       cards.set(job.id, {signature, node: card});
     }

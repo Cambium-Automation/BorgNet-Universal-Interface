@@ -82,7 +82,8 @@ const providerPresets = [
   ['Google Gemini','gemini','https://generativelanguage.googleapis.com/v1beta','GEMINI_API_KEY'],
   ['Cohere','cohere','https://api.cohere.com','COHERE_API_KEY'],
   ['Groq','openai','https://api.groq.com/openai/v1','GROQ_API_KEY'],
-  ['OpenRouter','openai','https://openrouter.ai/api/v1','OPENROUTER_API_KEY'],
+  ['Pollinations · Pollen credits','openai','https://gen.pollinations.ai/v1','POLLINATIONS_API_KEY'],
+  ['OpenRouter · free models','openai','https://openrouter.ai/api/v1','OPENROUTER_API_KEY'],
   ['DeepSeek','openai','https://api.deepseek.com','DEEPSEEK_API_KEY'],
   ['Together AI','openai','https://api.together.xyz/v1','TOGETHER_API_KEY'],
   ['Microsoft BitNet · local','openai','http://127.0.0.1:18081/v1',''],
@@ -98,15 +99,18 @@ $('#connectionForm').elements.preset.addEventListener('change',event=>{
   form.elements.use_ssh.checked=false;$('#sshFields').hidden=true;
   form.elements.cli_provider.value=p[4]||'codex';form.elements.cli_agent.value='';
   if(p[1]==='cli')form.elements.model.value='default';
+  if(p[2]==='https://openrouter.ai/api/v1'){form.elements.model.value='openrouter/free';form.elements.options.value=JSON.stringify({free_only:true});}
   updateConnectionFields();
 });
 function updateConnectionFields() {
   const form=$('#connectionForm'),cli=form.elements.kind.value==='cli';
+  $('#openrouterImportBox').hidden=cli||form.elements.kind.value!=='openai'||form.elements.url.value.replace(/\/$/,'')!=='https://openrouter.ai/api/v1';
   $('#cliFields').hidden=!cli;$('#apiFields').hidden=cli;$('#sshToggle').hidden=cli;
   $('#cliAgentField').hidden=!cli||form.elements.cli_provider.value!=='grok';
   form.elements.url.required=!cli;
   if(cli){form.elements.use_ssh.checked=false;$('#sshFields').hidden=true;}
 }
+$('#connectionForm').elements.url.addEventListener('input',updateConnectionFields);
 $('#connectionForm').elements.cli_provider.addEventListener('change',updateConnectionFields);
 function editConnection(c) {
   const form=$('#connectionForm');form.reset();$('#presetLabel').hidden=Boolean(c);$('#connectionTitle').textContent=c?'Edit connection':'Connect a provider';
