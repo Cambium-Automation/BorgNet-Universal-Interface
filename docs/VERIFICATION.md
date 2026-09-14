@@ -30,3 +30,5 @@ Model inventory persistence is verified across server recreation, with invalidat
 Per-model generation profiles preserve CPU/GPU settings across model switches. Regression checks verify that `num_gpu: 0` reaches Ollama without permitting overrides of protocol fields, that profiles survive configuration persistence, and that new models do not inherit a previous model's GPU-layer override.
 
 Peer reviews receive only other participants' proposals, an explicit list of required IDs, and an Ollama JSON schema for the ballot. Local validation still rejects missing, duplicate, or self-votes. Format retries include the prior malformed answer for correction. Proposal prompts include the configured model identity.
+
+Provider expansion: 44 Python tests pass, plus keyboard/model-options JavaScript checks. New controlled HTTP fixtures exercise Responses and Cohere authentication, history, output parsing, incomplete responses, Cohere model pagination, and Anthropic/Gemini options. See [provider setup and scope](PROVIDERS.md). Cloud accounts were not used for these checks.

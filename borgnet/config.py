@@ -36,7 +36,7 @@ class SSH(BaseModel):
 
 class Connection(BaseModel):
     id: str = Field(default="", max_length=64, pattern=r"^[a-zA-Z0-9_-]*$")
-    kind: Literal["ollama", "openai", "anthropic", "gemini"] = "ollama"
+    kind: Literal["ollama", "openai", "anthropic", "gemini", "responses", "cohere"] = "ollama"
     url: str
     purpose: str = Field(default="", max_length=4000)
     model: str = Field(default="", max_length=300)

@@ -59,8 +59,31 @@ async function discover(identity) {
     const c=state.connections.find(c=>c.id===identity); if(c && !c.model && result.models.length){await api('/connections',{...cleanConnection(c),model:result.models[0]});await load();}
   } catch(error){health.set(identity,{text:error.message,error:true});toast(error.message);} renderConnections();
 }
+const providerPresets = [
+  ['Ollama','ollama','http://localhost:11434',''],
+  ['LM Studio','openai','http://localhost:1234/v1',''],
+  ['llama.cpp / vLLM','openai','http://localhost:8080/v1',''],
+  ['OpenAI · Responses','responses','https://api.openai.com/v1','OPENAI_API_KEY'],
+  ['OpenAI · Chat Completions','openai','https://api.openai.com/v1','OPENAI_API_KEY'],
+  ['Anthropic','anthropic','https://api.anthropic.com/v1','ANTHROPIC_API_KEY'],
+  ['Google Gemini','gemini','https://generativelanguage.googleapis.com/v1beta','GEMINI_API_KEY'],
+  ['Cohere','cohere','https://api.cohere.com','COHERE_API_KEY'],
+  ['Groq','openai','https://api.groq.com/openai/v1','GROQ_API_KEY'],
+  ['OpenRouter','openai','https://openrouter.ai/api/v1','OPENROUTER_API_KEY'],
+  ['DeepSeek','openai','https://api.deepseek.com','DEEPSEEK_API_KEY'],
+  ['Together AI','openai','https://api.together.xyz/v1','TOGETHER_API_KEY']
+];
+providerPresets.forEach((p,i)=>$('#connectionForm').elements.preset.add(new Option(p[0],String(i))));
+$('#connectionForm').elements.preset.addEventListener('change',event=>{
+  if(event.target.value==='')return;
+  const form=$('#connectionForm'),p=providerPresets[Number(event.target.value)];
+  if(form.elements.id.value)return;
+  form.elements.kind.value=p[1];form.elements.url.value=p[2];form.elements.key_env.value=p[3];
+  form.elements.model.value='';form.elements.api_key.value='';form.elements.options.value='{}';
+  form.elements.use_ssh.checked=false;$('#sshFields').hidden=true;
+});
 function editConnection(c) {
-  const form=$('#connectionForm');form.reset();$('#connectionTitle').textContent=c?'Edit connection':'Connect a provider';
+  const form=$('#connectionForm');form.reset();$('#presetLabel').hidden=Boolean(c);$('#connectionTitle').textContent=c?'Edit connection':'Connect a provider';
   for(const name of ['id','kind','url','purpose','model','key_env']) form.elements[name].value=c?.[name] || (name==='kind'?'ollama':'');
   form.elements.use_ssh.checked=Boolean(c?.ssh);form.elements.options.value=JSON.stringify(c?.options||{},null,2);form.elements.timeout.value=c?.timeout||180;
   for(const [name,field] of [['ssh_host','host'],['ssh_user','user'],['ssh_port','port'],['remote_port','remote_port'],['identity_file','identity_file'],['remote_host','remote_host']]) if(c?.ssh) form.elements[name].value=c.ssh[field];
@@ -76,7 +99,7 @@ $('#connectionForm').addEventListener('submit',action(async event=>{
   const result=await api('/connections',body);$('#connectionDialog').close();await load();await discover(result.id);
 }));
 $('#connectionForm').elements.use_ssh.addEventListener('change',event=>{$('#sshFields').hidden=!event.target.checked;});
-$('#connectionForm').elements.kind.addEventListener('change',event=>{const form=$('#connectionForm'); if(!form.elements.id.value){const defaults={ollama:'http://localhost:11434',openai:'https://api.openai.com/v1',anthropic:'https://api.anthropic.com/v1',gemini:'https://generativelanguage.googleapis.com/v1beta'};form.elements.url.value=defaults[event.target.value];}});
+$('#connectionForm').elements.kind.addEventListener('change',event=>{const form=$('#connectionForm'); if(!form.elements.id.value){const defaults={ollama:'http://localhost:11434',openai:'https://api.openai.com/v1',anthropic:'https://api.anthropic.com/v1',gemini:'https://generativelanguage.googleapis.com/v1beta',responses:'https://api.openai.com/v1',cohere:'https://api.cohere.com'};form.elements.preset.value='';form.elements.key_env.value='';form.elements.api_key.value='';form.elements.options.value='{}';form.elements.url.value=defaults[event.target.value];}});
 $('#deleteConnection').addEventListener('click',action(async()=>{await api(`/connections/${$('#connectionForm').elements.id.value}/delete`,{});$('#connectionDialog').close();await load();}));
 $('#pullForm').addEventListener('submit',action(async event=>{event.preventDefault();const model=new FormData(event.currentTarget).get('model');$('#pullDialog').close();health.set(pullConnection,{text:'Downloading…'});renderConnections();toast('Download started. Large models may take several minutes.');const id=pullConnection;try{await api(`/connections/${id}/pull`,{model});toast('Model downloaded.');await discover(id);}catch(error){health.set(id,{text:error.message,error:true});renderConnections();throw error;}}));
 function renderContext() {

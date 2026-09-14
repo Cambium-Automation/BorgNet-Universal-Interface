@@ -112,3 +112,5 @@ node tests/keyboard.cjs
 ```
 
 Tests use synthetic HTTP provider fixtures and a real local MCP stdio session. They cover all four protocol adapters, discovery, downloads, parallel dispatch, peer ballot validation, ranking, implementation plans, incomplete participation, editor fallback, synthesis, history, privacy boundaries, SSH argument validation, and Enter behavior. They do not use real credentials, download real models, or contact any user's computers. See [verification notes](docs/VERIFICATION.md) for the tested scope and [architecture](docs/ARCHITECTURE.md) for extension points.
+
+See [provider setup](docs/PROVIDERS.md) for local/cloud presets, six supported text protocols, generation options, and compatibility limits.

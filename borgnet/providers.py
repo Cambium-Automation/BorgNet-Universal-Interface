@@ -93,6 +93,18 @@ class Providers:
                 raise ValueError("Provider returned an invalid JSON response") from None
 
     async def models(self, item):
+        if item.kind == "cohere":
+            names, token = set(), ""
+            for _ in range(20):
+                data = await self.request(item, "GET", "/v1/models?endpoint=chat&page_size=1000" + ("&page_token=" + quote(token, safe="") if token else ""), timeout=20)
+                names.update(m["name"] for m in data.get("models", []) if not m.get("is_deprecated"))
+                next_token = data.get("next_page_token")
+                if not next_token:
+                    return sorted(names)
+                if next_token == token:
+                    break
+                token = next_token
+            raise ValueError("Model discovery pagination did not finish; enter a model ID manually")
         path = "/api/tags" if item.kind == "ollama" else "/models"
         data = await self.request(item, "GET", path, timeout=20)
         if item.kind == "ollama":
@@ -120,13 +132,34 @@ class Providers:
             answer = choices[0].get("message", {}).get("content", "") if choices else ""
             if isinstance(answer, list):
                 answer = "\n".join(x.get("text", "") for x in answer if x.get("type") == "text")
+        elif item.kind == "responses":
+            data = await self.request(item, "POST", "/responses", {
+                "model": item.model, "input": messages, "instructions": system,
+                "store": False, "stream": False,
+                **{k: v for k, v in item.options.items() if k in {"max_output_tokens", "temperature", "top_p", "reasoning"}}})
+            if data.get("status") != "completed":
+                raise ValueError("Provider response did not complete; check output token limits and model support")
+            answer = "\n".join(c.get("text", "") for output in data.get("output", [])
+                if output.get("type") == "message" for c in output.get("content", []) if c.get("type") == "output_text")
+        elif item.kind == "cohere":
+            data = await self.request(item, "POST", "/v2/chat", {
+                "model": item.model, "stream": False,
+                "messages": ([{"role": "system", "content": system}] if system else []) + messages,
+                **{k: v for k, v in item.options.items() if k in {"max_tokens", "temperature", "p", "k", "stop_sequences", "seed"}}})
+            if data.get("finish_reason") != "COMPLETE":
+                raise ValueError("Provider response did not complete; check output token limits and model support")
+            answer = "\n".join(c.get("text", "") for c in data.get("message", {}).get("content", []) if c.get("type") == "text")
         elif item.kind == "anthropic":
             data = await self.request(item, "POST", "/messages", {"model": item.model, "max_tokens": 4096,
-                "system": system, "messages": messages})
+                "system": system, "messages": messages,
+                **{k: v for k, v in item.options.items() if k in {"max_tokens", "temperature", "top_p", "top_k", "stop_sequences"}}})
             answer = "\n".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
         else:
             payload = {"contents": [{"role": "model" if m["role"] == "assistant" else "user",
                 "parts": [{"text": m["content"]}]} for m in messages]}
+            generation = {k: v for k, v in item.options.items() if k in {"maxOutputTokens", "temperature", "topP", "topK", "stopSequences"}}
+            if generation:
+                payload["generationConfig"] = generation
             if system:
                 payload["systemInstruction"] = {"parts": [{"text": system}]}
             data = await self.request(item, "POST", f"/models/{quote(item.model, safe='')}:generateContent", payload)
