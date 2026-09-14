@@ -102,11 +102,12 @@ class Providers:
                            if "generateContent" in m.get("supportedGenerationMethods", [])})
         return sorted({m["id"] for m in data.get("data", [])})
 
-    async def chat(self, item, messages, system=""):
+    async def chat(self, item, messages, system="", response_schema=None):
         if not item.model:
             raise ValueError("Select a discovered model or enter a model ID first")
         if item.kind == "ollama":
             data = await self.request(item, "POST", "/api/chat", {"model": item.model, "stream": False,
+                **({"format": response_schema} if response_schema is not None else {}),
                 **{k: v for k, v in item.options.items() if k in {"think", "keep_alive"}},
                 "options": {k: v for k, v in item.options.items() if k in {"num_ctx", "num_predict", "num_gpu", "temperature", "top_p", "top_k"}},
                 "messages": ([{"role": "system", "content": system}] if system else []) + messages})

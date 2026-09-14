@@ -17,7 +17,7 @@ Evidence limits: no real cloud credentials, real model downloads, live remote SS
 
 ## Collaborative decisions and native icon
 
-35 automated tests pass, including question/implementation selection, malformed/self/duplicate/missing ballots, partial participation, quorum refusal, and final-editor fallback. These are controlled fixtures, not a benchmark of model answer quality. The native icon is generated from `native/render-icon.swift`, packaged as a multi-resolution ICNS, and the app bundle is ad-hoc signed and verified.
+37 automated tests pass, including question/implementation selection, malformed/self/duplicate/missing ballots, partial participation, quorum refusal, and final-editor fallback. These are controlled fixtures, not a benchmark of model answer quality. The native icon is generated from `native/render-icon.swift`, packaged as a multi-resolution ICNS, and the app bundle is ad-hoc signed and verified.
 
 A controlled three-model browser walkthrough confirmed Enter dispatch, collapsed proposal/review cards, the expanded final decision, smoke-tinted sent messages, and the untinted final answer. The API integration check also confirms the default collaborative path persists its selection to history.
 
@@ -28,3 +28,5 @@ The aggregated participant bar was checked with staggered synthetic responses: p
 Model inventory persistence is verified across server recreation, with invalidation on endpoint changes and deletion. Provider redirect tests confirm credentials are not forwarded; the model-options JavaScript check covers stale Ollama thinking settings. See [security review](SECURITY-REVIEW.md) for the release review scope.
 
 Per-model generation profiles preserve CPU/GPU settings across model switches. Regression checks verify that `num_gpu: 0` reaches Ollama without permitting overrides of protocol fields, that profiles survive configuration persistence, and that new models do not inherit a previous model's GPU-layer override.
+
+Peer reviews receive only other participants' proposals, an explicit list of required IDs, and an Ollama JSON schema for the ballot. Local validation still rejects missing, duplicate, or self-votes. Format retries include the prior malformed answer for correction. Proposal prompts include the configured model identity.

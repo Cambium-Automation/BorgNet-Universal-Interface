@@ -293,3 +293,15 @@ def test_model_profiles_survive_config_save(client):
     c=next(x for x in client.get('/api/state').json()['connections'] if x['id']==identity)
     assert c['model_options']['fixture-moe']['num_gpu']==0
     assert c['model_options']['fixture-small']['num_gpu']==12
+
+
+async def test_ollama_structured_output_uses_explicit_schema(tmp_path):
+    schema={'type':'object','properties':{'answer':{'type':'string'}},'required':['answer']}
+    seen=[]
+    def receive(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200,json={'message':{'content':'{"answer":"four"}'}})
+    p=Providers(Store(tmp_path),Tunnels(),httpx.MockTransport(receive));item=Connection(url='http://localhost:11434',model='fixture-chat')
+    await p.chat(item,[{'role':'user','content':'Question'}],response_schema=schema)
+    await p.chat(item,[{'role':'user','content':'Plain text'}])
+    assert seen[0]['format']==schema and 'format' not in seen[1]

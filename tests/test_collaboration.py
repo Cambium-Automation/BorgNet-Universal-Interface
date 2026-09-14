@@ -8,7 +8,7 @@ from borgnet.config import Connection
 class CouncilFixture:
     def __init__(self, task_type='question', failed=(), bad_reviews=False):
         self.calls=[];self.task_type=task_type;self.failed=failed;self.bad_reviews=bad_reviews
-    async def chat(self,item,messages,system):
+    async def chat(self,item,messages,system,response_schema=None):
         self.calls.append((item.id,system,messages))
         if 'PROPOSAL ROUND' in system:
             if item.id in self.failed:
@@ -81,7 +81,7 @@ def test_self_votes_duplicates_missing_and_unknown_proposals_rejected(ids):
 
 async def test_invalid_coordinator_retries_with_another_participant():
     class Fallback(CouncilFixture):
-        async def chat(self,item,messages,system):
+        async def chat(self,item,messages,system,response_schema=None):
             if 'FINAL DECISION' in system and item.id=='c0':return '{}'
             return await super().chat(item,messages,system)
     _,record=await run(Fallback())
@@ -144,3 +144,24 @@ def test_fifty_connections_dispatch_review_and_capacity_boundary(tmp_path, monke
         assert all(row['reviews']==49 for row in final['ranking'])
         assert len(fixture.calls)==101
         assert client.get('/api/state').json()['history'][-1]['results'][-1]['phase']=='final'
+
+
+async def test_review_schema_excludes_self_and_requires_all_peer_slots():
+    class Structured(CouncilFixture):
+        async def chat(self,item,messages,system,response_schema=None):
+            if 'PEER REVIEW ROUND' in system:
+                data=json.loads(messages[0]['content'])
+                peers=data['required_peer_ids']
+                assert data['your_proposal_id'] not in peers
+                assert data['your_proposal_id'] not in [p['proposal_id'] for p in data['proposals']]
+                assert response_schema['$defs']['Vote']['properties']['proposal_id']['enum']==peers
+                assert response_schema['properties']['ranking']['minItems']==2
+                assert response_schema['properties']['ranking']['maxItems']==2
+            elif 'FINAL DECISION' in system:
+                assert response_schema is None
+            else:
+                assert response_schema is None
+                assert 'You are the participant running model fixture-chat.' in system
+            return await super().chat(item,messages,system,response_schema)
+    _,record=await run(Structured())
+    assert record['results'][-1]['status']=='complete'
