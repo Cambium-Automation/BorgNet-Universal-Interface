@@ -51,7 +51,7 @@ func focusFrostAlpha(isKeyWindow: Bool) -> CGFloat {
 }
 
 
-final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKScriptMessageHandler {
+final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     private var workspaceURL: URL?
     private var window: NSWindow!
     private var webView: WKWebView!
@@ -63,6 +63,7 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var nativeMaterial = "visual-effect"
     private var userBlur: Double?
     private let radiusBlur = WindowBackdropBlur()
+    private var radiusBlurAvailable = false
     private var fallbackMaterial: NSVisualEffectView?
     private let zoomSteps: [Double] = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
     private var zoomLabel: NSMenuItem?
@@ -113,8 +114,11 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             nativeMaterial = "liquid-glass"
         }
 
-        if radiusBlur.apply(window: window, radius: 0) {
-            nativeMaterial = "radius-blur"
+        radiusBlurAvailable = radiusBlur.apply(window: window, radius: 0)
+        if radiusBlurAvailable {
+            // Adjustable blur supplements Liquid Glass; it must not replace the
+            // native material responsible for edge refraction and highlights.
+            if nativeMaterial != "liquid-glass" { nativeMaterial = "radius-blur" }
             // WindowServer does not blur fully transparent pixels.
             window.backgroundColor = NSColor.black.withAlphaComponent(0.001)
         }
@@ -129,6 +133,7 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         webView = WKWebView(frame: container.bounds, configuration: configuration)
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         let savedZoom = UserDefaults.standard.double(forKey: "BorgNetPageZoom")
         applyZoom(savedZoom > 0 ? savedZoom : 1)
         webView.setValue(false, forKey: "drawsBackground")
@@ -244,7 +249,7 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         if body["reset"] as? Bool == true { radius = 0 }
         else if let value = body["radius"] as? Double, value.isFinite, (0...100).contains(value) { radius = value }
         else { return }
-        let applied = nativeMaterial == "radius-blur" && radiusBlur.apply(window: window, radius: radius)
+        let applied = radiusBlurAvailable && radiusBlur.apply(window: window, radius: radius)
         webView.evaluateJavaScript("window.dispatchEvent(new CustomEvent('borgnet-blur-status',{detail:{available:\(applied),radius:\(radius)}}))")
     }
 
@@ -271,6 +276,13 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             material: nativeMaterial,
             appearance: dark ? "dark" : "light"
         ))
+    }
+
+    func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+                 initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
+                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        let trusted = origin.protocol == "http" && origin.host == "127.0.0.1" && origin.port == 7337 && frame.isMainFrame
+        decisionHandler(trusted ? .prompt : .deny)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

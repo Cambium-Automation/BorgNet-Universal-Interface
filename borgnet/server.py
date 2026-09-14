@@ -52,6 +52,9 @@ def create_app(root: Path, provider_transport=None):
     from .videos import register_videos
     register_videos(app, root, store)
 
+    from .voice_video import register_voice_video
+    register_voice_video(app, store, providers)
+
     from .security import LocalBoundary
     session = secrets.token_urlsafe(32)
     media = secrets.token_urlsafe(32)

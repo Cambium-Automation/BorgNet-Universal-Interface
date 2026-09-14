@@ -9,7 +9,7 @@ HEADERS = {
     'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
     'Cache-Control': 'no-store', 'Cross-Origin-Resource-Policy': 'same-origin',
     'X-Frame-Options': 'DENY',
-    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
+    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
 }
 
 
@@ -50,6 +50,7 @@ class LocalBoundary:
         if scope['method'] not in {'GET', 'HEAD', 'OPTIONS'}:
             if not secrets.compare_digest(headers.get('x-borgnet-token', '').encode('utf-8'), self.token.encode('ascii')):
                 return await reject('Refresh this page before making changes', 403)
+        limit = 11_000_000 if path == '/api/voice-video/respond' else LIMIT
         if scope['method'] not in {'GET', 'HEAD'}:
             try:
                 declared = int(headers.get('content-length', '0'))
@@ -57,7 +58,7 @@ class LocalBoundary:
                     raise ValueError()
             except ValueError:
                 return await reject('Invalid Content-Length', 400)
-            if declared > LIMIT:
+            if declared > limit:
                 return await reject('Request too large', 413)
             body = bytearray()
             more = True
@@ -66,7 +67,7 @@ class LocalBoundary:
                 if message['type'] == 'http.disconnect':
                     return
                 body.extend(message.get('body', b''))
-                if len(body) > LIMIT:
+                if len(body) > limit:
                     return await reject('Request too large', 413)
                 more = message.get('more_body', False)
             delivered = False

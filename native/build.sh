@@ -17,6 +17,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleVersion</key><string>2</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
+<key>NSMicrophoneUsageDescription</key><string>Record voice messages when you choose Record microphone.</string>
+<key>NSCameraUsageDescription</key><string>Record video clips when you choose Record camera.</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict></plist>
