@@ -1,0 +1,215 @@
+import json
+import os
+import sys
+from pathlib import Path
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+from pydantic import ValidationError
+from borgnet.config import Store, Connection, SSH, MCPSource
+from borgnet.providers import Providers, Tunnels
+from borgnet.server import create_app
+from borgnet.mcp_bridge import inspect_source, fetch_context, shared_server
+
+
+def fixture_response(request):
+    path = request.url.path
+    if request.method == 'GET':
+        return httpx.Response(200,json={'models':[{'name':'fixture-chat','supportedGenerationMethods':['generateContent']}], 'data':[{'id':'fixture-chat'}]})
+    payload=json.loads(request.content)
+    if path == '/api/chat':
+        assert payload['stream'] is False
+        return httpx.Response(200,json={'message':{'content':'Fixture answer'}})
+    if path.endswith('/chat/completions'):
+        return httpx.Response(200,json={'choices':[{'message':{'content':'Fixture answer'}}]})
+    if path.endswith('/messages'):
+        assert request.headers['anthropic-version']=='2023-06-01'
+        return httpx.Response(200,json={'content':[{'type':'text','text':'Fixture answer'}]})
+    if ':generateContent' in path:
+        return httpx.Response(200,json={'candidates':[{'content':{'parts':[{'text':'Hidden','thought':True},{'text':'Fixture answer'}]}}]})
+    if path == '/api/pull':
+        assert payload['model']=='fixture-download'
+        return httpx.Response(200,json={'status':'success'})
+    raise AssertionError(path)
+
+
+@pytest.fixture
+def client(tmp_path):
+    with TestClient(create_app(tmp_path, httpx.MockTransport(fixture_response))) as client:
+        client.headers['X-BorgNet-Token']=client.get('/api/state').json()['token']
+        yield client
+
+
+def add(client, **kwargs):
+    response=client.post('/api/connections',json={'kind':'ollama','url':'http://localhost:11434','model':'fixture-chat',**kwargs})
+    assert response.status_code==200,response.text
+    return response.json()['id']
+
+
+def test_first_launch_is_empty_and_secrets_never_return(client,tmp_path):
+    state=client.get('/api/state').json()
+    assert state['connections']==state['mcp_sources']==state['context']==state['history']==[]
+    identity=add(client,api_key='fixture-secret-value')
+    state=client.get('/api/state')
+    assert 'fixture-secret-value' not in state.text
+    assert state.json()['connections'][0]['has_key'] is True
+    assert (tmp_path/'secrets.json').stat().st_mode & 0o777 == 0o600
+    client.post(f'/api/connections/{identity}/delete',json={})
+    assert json.loads((tmp_path/'secrets.json').read_text())=={}
+
+
+def test_origin_host_and_token_boundary(client):
+    assert client.post('/api/settings',json={'theme':'dark'},headers={'Origin':'https://untrusted.example'}).status_code==403
+    assert client.get('/api/state',headers={'Host':'untrusted.example'}).status_code==403
+    assert client.post('/api/settings',json={'theme':'dark'},headers={'X-BorgNet-Token':'wrong'}).status_code==403
+    assert client.post('/api/settings',json={'theme':'light'}).status_code==200
+    assert client.get('/api/state').json()['theme']=='light'
+
+
+@pytest.mark.parametrize('kind',['ollama','openai','anthropic','gemini'])
+async def test_adapters_discover_and_chat(kind,tmp_path):
+    item=Connection(id='fixture',kind=kind,url='http://localhost:1234',model='fixture-chat')
+    adapter=Providers(Store(tmp_path),Tunnels(),httpx.MockTransport(fixture_response))
+    assert await adapter.models(item)==['fixture-chat']
+    assert await adapter.chat(item,[{'role':'user','content':'Fixture question'}],'Fixture purpose')=='Fixture answer'
+
+
+async def test_auth_headers_and_no_error_secret_leak(tmp_path):
+    store=Store(tmp_path);store.save_secret('fixture','fixture-secret-value')
+    def upstream(request):
+        assert request.headers['Authorization']=='Bearer fixture-secret-value'
+        return httpx.Response(401,text='fixture-secret-value')
+    adapter=Providers(store,Tunnels(),httpx.MockTransport(upstream))
+    with pytest.raises(ValueError) as error:
+        await adapter.models(Connection(id='fixture',url='http://localhost:1234'))
+    assert 'fixture-secret-value' not in str(error.value)
+    assert '401' in str(error.value)
+
+
+async def test_blank_answer_is_error(tmp_path):
+    adapter=Providers(Store(tmp_path),Tunnels(),httpx.MockTransport(lambda r:httpx.Response(200,json={'message':{'content':''}})))
+    with pytest.raises(ValueError,match='no public text'):
+        await adapter.chat(Connection(url='http://localhost:1234',model='fixture-chat'),[{'role':'user','content':'Hi'}])
+
+
+def test_parallel_dispatch_and_history(client):
+    one=add(client,purpose='Research');two=add(client,kind='openai',url='http://localhost:1234/v1',purpose='Review')
+    response=client.post('/api/dispatch',json={'prompt':'Fixture question','connections':[one,two],'synthesize':two})
+    assert response.status_code==200,response.text
+    events=[json.loads(line) for line in response.text.splitlines()]
+    results=[e for e in events if e['type']=='result']
+    assert len(results)==3
+    assert all(r['status']=='complete' for r in results)
+    assert results[-1]['synthesis'] is True
+    history=client.get('/api/state').json()['history']
+    assert len(history)==1 and len(history[0]['results'])==3
+    assert history[0]['conversation']==events[0]['conversation']
+
+
+def test_discovery_pull_and_disabled_guard(client):
+    identity=add(client)
+    assert client.post(f'/api/connections/{identity}/discover',json={}).json()['models']==['fixture-chat']
+    assert client.post(f'/api/connections/{identity}/pull',json={'model':'fixture-download'}).json()['status']=='success'
+    add(client,id=identity,enabled=False)
+    assert client.post('/api/dispatch',json={'prompt':'Hi','connections':[identity]}).status_code==400
+
+
+def test_ssh_validation_and_no_shell():
+    with pytest.raises(ValidationError):
+        SSH(host='-oProxyCommand=anything')
+    with pytest.raises(ValidationError):
+        SSH(host='example.com;echo test')
+    args=Tunnels.command(SSH(host='compute.example.com',user='operator'),23456)
+    assert args[-1]=='operator@compute.example.com'
+    assert '127.0.0.1:23456:127.0.0.1:11434' in args
+    assert 'StrictHostKeyChecking=yes' in args and 'BatchMode=yes' in args
+    with pytest.raises(ValidationError):
+        Connection(url='http://api.example.com')
+    with pytest.raises(ValidationError):
+        Connection(url='https://secret@api.example.com')
+
+
+async def test_real_stdio_mcp_and_sharing_boundary(tmp_path):
+    store=Store(tmp_path)
+    store.write('context',[{'id':'private','title':'Private','text':'private-text','shared':False},{'id':'public','title':'Shared fixture','text':'shared-text','shared':True}])
+    source=MCPSource(name='Fixture MCP',transport='stdio',command=sys.executable,args=['-m','borgnet','--data-dir',str(tmp_path),'mcp'])
+    discovery=await inspect_source(source,store)
+    assert {t['name'] for t in discovery['tools']}=={'list_shared_context','read_shared_context'}
+    assert discovery['resources'][0]['uri']=='borgnet://shared/context'
+    text=await fetch_context(source,store,'tool','read_shared_context',{'context_id':'public'})
+    assert text=='shared-text'
+    index=await fetch_context(source,store,'resource','borgnet://shared/context',{})
+    assert 'private' not in index and 'public' in index
+    with pytest.raises(ValueError):
+        await fetch_context(source,store,'tool','read_shared_context',{'context_id':'private'})
+
+
+def test_context_is_opt_in_and_editable(client):
+    result=client.post('/api/context',json={'title':'Reference','text':'A fixture reference'}).json()
+    assert result['shared'] is False
+    result['shared']=True
+    assert client.post('/api/context',json=result).status_code==200
+    assert client.get('/api/state').json()['context'][0]['shared'] is True
+    client.post(f"/api/context/{result['id']}/delete",json={})
+    assert client.get('/api/state').json()['context']==[]
+
+
+async def test_real_streamable_http_mcp(tmp_path):
+    import asyncio
+    import socket
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1',0))
+        port=listener.getsockname()[1]
+    process=await asyncio.create_subprocess_exec(sys.executable,str(Path(__file__).with_name('mcp_fixture.py')),str(port),
+        stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
+    try:
+        for _ in range(100):
+            try:
+                reader,writer=await asyncio.open_connection('127.0.0.1',port)
+                writer.close();await writer.wait_closed();break
+            except OSError:
+                await asyncio.sleep(.05)
+        else:
+            pytest.fail('HTTP MCP fixture failed to start')
+        source=MCPSource(name='HTTP fixture',url=f'http://127.0.0.1:{port}/mcp')
+        store=Store(tmp_path)
+        listing=await inspect_source(source,store)
+        assert listing['tools'][0]['name']=='read_fixture'
+        assert await fetch_context(source,store,'tool','read_fixture',{})=='HTTP MCP fixture text'
+        assert await fetch_context(source,store,'resource','fixture://reference',{})=='HTTP MCP fixture reference'
+    finally:
+        process.terminate()
+        await process.wait()
+
+
+def test_partial_failure_is_not_successful_consensus(tmp_path):
+    def respond(request):
+        if request.url.path.endswith('/chat/completions'):
+            return httpx.Response(503,json={'error':'fixture error'})
+        return fixture_response(request)
+    with TestClient(create_app(tmp_path,httpx.MockTransport(respond))) as client:
+        client.headers['X-BorgNet-Token']=client.get('/api/state').json()['token']
+        first=add(client);second=add(client,kind='openai',url='http://localhost:1234/v1')
+        response=client.post('/api/dispatch',json={'prompt':'Check failure','connections':[first,second],'synthesize':first})
+        results=[e for e in map(json.loads,response.text.splitlines()) if e['type']=='result']
+        assert [r['status'] for r in results].count('complete')==1
+        assert results[-1]['synthesis'] and results[-1]['status']=='error'
+
+
+def test_context_and_followup_reach_only_selected_provider(tmp_path):
+    calls=[]
+    def respond(request):
+        calls.append(json.loads(request.content))
+        return fixture_response(request)
+    with TestClient(create_app(tmp_path,httpx.MockTransport(respond))) as client:
+        client.headers['X-BorgNet-Token']=client.get('/api/state').json()['token']
+        identity=add(client,purpose='Fixture purpose')
+        context=client.post('/api/context',json={'title':'Selected context','text':'Selected reference text'}).json()
+        client.post('/api/context',json={'title':'Private context','text':'Do not transmit this'})
+        first=client.post('/api/dispatch',json={'prompt':'First question','connections':[identity],'contexts':[context['id']]}).text
+        conversation=json.loads(first.splitlines()[0])['conversation']
+        client.post('/api/dispatch',json={'prompt':'Follow up','connections':[identity],'conversation':conversation})
+        assert 'Selected reference text' in json.dumps(calls[0])
+        assert 'Do not transmit this' not in json.dumps(calls)
+        assert calls[1]['messages'][0]=={'role':'system','content':'Fixture purpose'}
+        assert any(m['role']=='assistant' and m['content']=='Fixture answer' for m in calls[1]['messages'])
