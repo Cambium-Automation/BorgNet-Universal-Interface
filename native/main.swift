@@ -22,7 +22,7 @@ func nativeAppearanceScript(material: String, appearance: String? = nil) -> Stri
 
 
 func focusFrostAlpha(isKeyWindow: Bool) -> CGFloat {
-    isKeyWindow ? 0.05 : 0
+    isKeyWindow ? 0.08 : 0
 }
 
 
@@ -31,6 +31,7 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var webView: WKWebView!
     private var glassView: NSView?
     private var focusFrostView: NSVisualEffectView?
+    private var focusShadeView: NSView?
     private var appearanceObservation: NSKeyValueObservation?
     private var darkAppearance: Bool?
     private var nativeMaterial = "visual-effect"
@@ -99,11 +100,17 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             frost.state = .active
             frost.isEmphasized = false
             frost.alphaValue = focusFrostAlpha(isKeyWindow: false)
+            let shade = NSView(frame: glassContent.bounds)
+            shade.translatesAutoresizingMaskIntoConstraints = false
+            shade.wantsLayer = true
+            shade.layer?.backgroundColor = NSColor.black.cgColor
+            shade.alphaValue = 0
             webView.translatesAutoresizingMaskIntoConstraints = false
             // Soften only the backdrop, leaving text and controls outside the frost layer.
             glassContent.addSubview(frost)
+            glassContent.addSubview(shade)
             glassContent.addSubview(webView)
-            for view in [frost, webView] as [NSView] {
+            for view in [frost, shade, webView] as [NSView] {
                 NSLayoutConstraint.activate([
                     view.leadingAnchor.constraint(equalTo: glassContent.leadingAnchor),
                     view.trailingAnchor.constraint(equalTo: glassContent.trailingAnchor),
@@ -115,6 +122,7 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             container.addSubview(glass)
             glassView = glass
             focusFrostView = frost
+            focusShadeView = shade
         } else {
             let material = NSVisualEffectView(frame: container.bounds)
             material.autoresizingMask = [.width, .height]
@@ -164,6 +172,8 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         NSAnimationContext.runAnimationGroup { context in
             context.duration = animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.16 : 0
             frost.animator().alphaValue = alpha
+            // A two-percent dark backing improves contrast without fading the text.
+            focusShadeView?.animator().alphaValue = window.isKeyWindow ? 0.02 : 0
         }
     }
 

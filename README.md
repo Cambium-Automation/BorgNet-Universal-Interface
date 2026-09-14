@@ -72,7 +72,7 @@ Build with an Xcode command-line toolchain containing the macOS 26 SDK:
 bash native/build.sh
 ```
 
-Start `borgnet serve`, then open `dist/BorgNet Universal Interface.app`. The shell uses native Liquid Glass on macOS 26+, with a visual-effect fallback on older systems. Its title bar remains visible, and the glass content meets it flush. The web interface supports system, light, and dark themes. The surrounding native title bar follows macOS appearance.
+Start `borgnet serve`, then open `dist/BorgNet Universal Interface.app`. The shell uses native Liquid Glass on macOS 26+, with a visual-effect fallback on older systems. Its title bar remains visible, and the glass content meets it flush. The web interface supports system, light, and dark themes. The surrounding native title bar follows macOS appearance. While the window is active, an 8% frost blend and a 2% dark backing improve text contrast without fading the content. These extra layers fade out when inactive, leaving the system glass treatment visible.
 
 The build is ad-hoc signed for local use. It does not install or replace other apps, require an existing app as a template, or contain a developer's absolute paths. Distribution with Apple notarization requires the distributor's own signing identity. Older-system rendering and Intel builds have not been verified.
 
