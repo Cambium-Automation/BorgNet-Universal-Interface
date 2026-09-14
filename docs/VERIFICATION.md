@@ -32,3 +32,10 @@ Per-model generation profiles preserve CPU/GPU settings across model switches. R
 Peer reviews receive only other participants' proposals, an explicit list of required IDs, and an Ollama JSON schema for the ballot. Local validation still rejects missing, duplicate, or self-votes. Format retries include the prior malformed answer for correction. Proposal prompts include the configured model identity.
 
 Provider expansion: 44 Python tests pass, plus keyboard/model-options JavaScript checks. New controlled HTTP fixtures exercise Responses and Cohere authentication, history, output parsing, incomplete responses, Cohere model pagination, and Anthropic/Gemini options. See [provider setup and scope](PROVIDERS.md). Cloud accounts were not used for these checks.
+
+Image workspace update: 49 Python tests pass, including authenticated image actions,
+path rejection, symlink rejection, state isolation, opt-in native connections,
+refusal/quiet-reasoning handling, recoverable delete/restore, and collision-safe
+exports preserving original bytes. Existing keyboard and per-model option checks
+also pass. Native provider rendering was verified in the private local integration;
+public installations still require their own supported CLI, sign-in, or API access.

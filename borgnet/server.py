@@ -41,6 +41,8 @@ def create_app(root: Path, provider_transport=None):
 
     app = FastAPI(title="BorgNet Universal Interface", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.store, app.state.providers = store, providers
+    from .images import register_images
+    register_images(app, root, store)
 
     @app.middleware("http")
     async def local_boundary(request, call_next):

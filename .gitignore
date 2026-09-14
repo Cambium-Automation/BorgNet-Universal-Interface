@@ -21,3 +21,10 @@ context.json
 .DS_Store
 
 model-catalog.json
+
+# Local image artifacts and provider state
+api-images/
+image-jobs/
+api-image-history.json
+image-library-deleted.json
+image-models-*.json

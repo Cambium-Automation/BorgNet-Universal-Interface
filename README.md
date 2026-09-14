@@ -114,3 +114,13 @@ node tests/keyboard.cjs
 Tests use synthetic HTTP provider fixtures and a real local MCP stdio session. They cover all four protocol adapters, discovery, downloads, parallel dispatch, peer ballot validation, ranking, implementation plans, incomplete participation, editor fallback, synthesis, history, privacy boundaries, SSH argument validation, and Enter behavior. They do not use real credentials, download real models, or contact any user's computers. See [verification notes](docs/VERIFICATION.md) for the tested scope and [architecture](docs/ARCHITECTURE.md) for extension points.
 
 See [provider setup](docs/PROVIDERS.md) for local/cloud presets, six supported text protocols, generation options, and compatibility limits.
+
+### Image generation and library
+
+The Image generation tab supports OpenAI, Gemini, and xAI image APIs. Configure a provider in the tab, set its `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `XAI_API_KEY` environment variable, or reuse a chat connection whose URL exactly matches the provider's official API base URL. Model discovery runs when you open the image tab. Catalog entries without credentials remain unavailable; discovery does not guarantee quota or model access.
+
+For native image tools through an already authenticated CLI, install `codex` or `grok` on your PATH and explicitly enable `BORGNET_CODEX_IMAGES=1` or `BORGNET_GROK_IMAGES=1` in the environment used to launch BorgNet. These modes use the existing CLI sign-in without an additional image API key. CLI versions must support their native image tools; account usage limits still apply. Codex uses its CLI default model. No CLI connection is enabled or contacted by default.
+
+Generated images remain in your local state directory. Each gallery item and enlarged image has **Save to Downloads** and **Delete** controls. Saving exports the original PNG, JPEG, or WebP on the computer running BorgNet with a collision-safe filename. Deletion removes the image from the active gallery and retains it under **Recently deleted**, with **Restore** available; it does not erase image bytes or export copies. Provider rejections and quota errors are displayed separately.
+
+Native generation runs in a separate job directory with a bounded timeout. Public assistant failure messages may be shown; private reasoning and raw tool transcripts are not displayed. Job logs remain local. This release does not include machine-specific image runtimes or private security specialist interfaces.
