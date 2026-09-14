@@ -36,7 +36,7 @@ This is a local application. Its web server binds only to loopback. Keep it runn
 
 Compatible local servers include those exposing OpenAI-style chat completions. Compatibility depends on the endpoint and chosen model, not its brand. You may enter an explicit model ID when a provider disables discovery. There is no bundled model list. Selecting an Ollama model loads it on the first inference request; the download button explicitly pulls a tag supplied by the user. The application does not install runtimes or manage remote system services.
 
-Discovered model choices are saved in your private workspace and remain selectable after reload or restart. Use the refresh control to update them. Changing the endpoint clears its saved inventory. Switching Ollama models clears the previous model’s thinking override while retaining general generation options.
+Discovered model choices are saved in your private workspace and remain selectable after reload or restart. Use the refresh control to update them. Changing the endpoint clears its saved inventory. BorgNet remembers generation options per model when switching. For a model without saved options, Ollama thinking and GPU-layer overrides reset while general generation options remain. Set `num_gpu` to `0` for a runtime that needs CPU-only execution; hardware tuning stays in the private workspace.
 
 Discovery currently reads the first model-list page for provider APIs. If a large account's desired model is not on that page, enter its model ID directly. Provider-specific extensions, Responses-only models, media generation, realtime audio/video, OAuth sign-in, and automatic agent tool execution are outside this initial release.
 
@@ -54,7 +54,7 @@ Use a key in the connection form, or enter the name of an environment variable a
 
 ### Per-connection runtime options
 
-The connection form includes a JSON options object and a response timeout. Ollama accepts `num_ctx`, `num_predict`, `temperature`, `top_p`, `top_k`, `think`, and `keep_alive`. OpenAI-compatible endpoints accept `max_tokens`, `max_completion_tokens`, `temperature`, `top_p`, `top_k`, `reasoning_effort`, `reasoning_format`, and `thinking_budget_tokens` when their provider supports them. Model IDs, messages, and streaming controls cannot be overridden through this object. Other adapters retain their protocol defaults. The chosen synthesis connection is saved with workspace settings.
+The connection form includes a JSON options object and a response timeout. Ollama accepts `num_ctx`, `num_predict`, `num_gpu`, `temperature`, `top_p`, `top_k`, `think`, and `keep_alive`. OpenAI-compatible endpoints accept `max_tokens`, `max_completion_tokens`, `temperature`, `top_p`, `top_k`, `reasoning_effort`, `reasoning_format`, and `thinking_budget_tokens` when their provider supports them. Model IDs, messages, and streaming controls cannot be overridden through this object. Other adapters retain their protocol defaults. The chosen synthesis connection is saved with workspace settings.
 
 ## One prompt, several perspectives
 

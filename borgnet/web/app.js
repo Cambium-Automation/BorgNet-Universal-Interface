@@ -17,7 +17,8 @@ async function api(path, body) {
 function action(fn) { return async event => { try { await fn(event); } catch (error) { toast(error.message); } }; }
 function button(text, handler, className='subtle') { const b=el('button', className, text); b.type='button'; b.addEventListener('click', action(handler)); return b; }
 function cleanConnection(c) { return Object.fromEntries(Object.entries(c).filter(([key]) => !['address','has_key'].includes(key))); }
-function modelOptions(connection,model){const options={...connection.options};if(connection.kind==='ollama'&&model!==connection.model)delete options.think;return options;}
+function modelOptions(connection,model){if(model!==connection.model&&connection.model_options?.[model])return {...connection.model_options[model]};const options={...connection.options};if(connection.kind==='ollama'&&model!==connection.model){delete options.think;delete options.num_gpu;}return options;}
+function modelProfiles(connection){return connection.model?{...connection.model_options,[connection.model]:{...connection.options}}:{...connection.model_options};}
 function selected() { return state.connections.filter(c => c.enabled && c.model); }
 function tab(name) { $$('.tabs button').forEach(b => { b.classList.toggle('active', b.dataset.tab === name); b.setAttribute('aria-pressed', String(b.dataset.tab === name)); }); $$('.panel').forEach(p => p.classList.toggle('active', p.id === name + 'Panel')); }
 async function load() { state = await api('/state'); discovered.clear();for(const [id,models] of Object.entries(state.model_catalog||{}))discovered.set(id,models); document.body.dataset.theme = state.theme; $('#theme').value = state.theme; renderConnections(); renderContext(); renderHistory(); }
@@ -44,7 +45,7 @@ function renderConnections() {
     const models=[...new Set([...(discovered.get(c.id)||[]),...(c.model?[c.model]:[])])];
     picker.add(new Option(models.length ? 'Choose a model' : 'Discover or enter a model', ''));
     models.forEach(model=>picker.add(new Option(model,model))); picker.value=c.model;
-    picker.addEventListener('change',action(async()=>{await api('/connections',{...cleanConnection(c),model:picker.value,options:modelOptions(c,picker.value)}); await load();})); card.append(picker);
+    picker.addEventListener('change',action(async()=>{await api('/connections',{...cleanConnection(c),model:picker.value,options:modelOptions(c,picker.value),model_options:modelProfiles(c)}); await load();})); card.append(picker);
     if(c.purpose) card.append(el('p','purpose',c.purpose));
     const h=health.get(c.id), footer=el('footer'); footer.append(el('span',`health${h?.error?' error':''}`,h?.text || 'Not checked'));
     const controls=el('div'); const refresh=button('↻',()=>discover(c.id),'icon'); refresh.title='Discover models'; refresh.setAttribute('aria-label',`Discover models for ${c.address}`); controls.append(refresh);
@@ -70,7 +71,7 @@ function editConnection(c) {
 $('#connectionForm').addEventListener('submit',action(async event=>{
   event.preventDefault();const form=event.currentTarget, values=Object.fromEntries(new FormData(form));
   const old=state.connections.find(c=>c.id===values.id);
-  const body={id:values.id,kind:values.kind,url:values.url,purpose:values.purpose,model:values.model,key_env:values.key_env,enabled:old?.enabled??true,api_key:values.api_key||null,
+  const body={id:values.id,kind:values.kind,url:values.url,purpose:values.purpose,model:values.model,key_env:values.key_env,enabled:old?.enabled??true,model_options:old?.model_options||{},api_key:values.api_key||null,
     ssh:form.elements.use_ssh.checked?{host:values.ssh_host,user:values.ssh_user,port:Number(values.ssh_port),remote_port:Number(values.remote_port),identity_file:values.identity_file,remote_host:values.remote_host||'127.0.0.1'}:null,options:JSON.parse(values.options||'{}'),timeout:Number(values.timeout)};
   const result=await api('/connections',body);$('#connectionDialog').close();await load();await discover(result.id);
 }));

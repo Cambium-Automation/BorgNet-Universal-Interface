@@ -17,7 +17,7 @@ Evidence limits: no real cloud credentials, real model downloads, live remote SS
 
 ## Collaborative decisions and native icon
 
-33 automated tests pass, including question/implementation selection, malformed/self/duplicate/missing ballots, partial participation, quorum refusal, and final-editor fallback. These are controlled fixtures, not a benchmark of model answer quality. The native icon is generated from `native/render-icon.swift`, packaged as a multi-resolution ICNS, and the app bundle is ad-hoc signed and verified.
+35 automated tests pass, including question/implementation selection, malformed/self/duplicate/missing ballots, partial participation, quorum refusal, and final-editor fallback. These are controlled fixtures, not a benchmark of model answer quality. The native icon is generated from `native/render-icon.swift`, packaged as a multi-resolution ICNS, and the app bundle is ad-hoc signed and verified.
 
 A controlled three-model browser walkthrough confirmed Enter dispatch, collapsed proposal/review cards, the expanded final decision, smoke-tinted sent messages, and the untinted final answer. The API integration check also confirms the default collaborative path persists its selection to history.
 
@@ -26,3 +26,5 @@ The 50-connection capacity test creates 50 entries, edits at capacity, rejects e
 The aggregated participant bar was checked with staggered synthetic responses: pending Thinking labels, expandable in-progress proposals, completed green names, peer review transitions, and a separate final answer.
 
 Model inventory persistence is verified across server recreation, with invalidation on endpoint changes and deletion. Provider redirect tests confirm credentials are not forwarded; the model-options JavaScript check covers stale Ollama thinking settings. See [security review](SECURITY-REVIEW.md) for the release review scope.
+
+Per-model generation profiles preserve CPU/GPU settings across model switches. Regression checks verify that `num_gpu: 0` reaches Ollama without permitting overrides of protocol fields, that profiles survive configuration persistence, and that new models do not inherit a previous model's GPU-layer override.

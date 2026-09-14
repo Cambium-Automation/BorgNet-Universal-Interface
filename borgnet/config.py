@@ -44,6 +44,7 @@ class Connection(BaseModel):
     key_env: str = Field(default="", max_length=128, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$|^$")
     ssh: SSH | None = None
     options: dict = Field(default_factory=dict)
+    model_options: dict[str, dict] = Field(default_factory=dict)
     timeout: int = Field(default=180, ge=10, le=1800)
     _url = field_validator("url")(endpoint)
 

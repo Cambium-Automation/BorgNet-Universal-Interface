@@ -8,3 +8,11 @@ assert.equal(switched.think,undefined);assert.equal(switched.num_ctx,8192);asser
 assert.equal(context.modelOptions(connection,'thinking-model').think,'low');
 assert.equal(context.modelOptions({...connection,kind:'openai'},'another-model').think,'low');
 console.log('Model switching drops stale Ollama thinking overrides and preserves general settings.');
+vm.runInContext(source.match(/^function modelProfiles\(.*$/m)[0],context);
+const cpu={...connection,options:{...connection.options,num_gpu:0},model_options:{alternate:{num_gpu:12,num_ctx:4096}}};
+assert.equal(context.modelOptions(cpu,'new-model').num_gpu,undefined);
+assert.equal(context.modelOptions(cpu,'alternate').num_gpu,12);
+const saved=context.modelProfiles(cpu);assert.equal(saved['thinking-model'].num_gpu,0);
+assert.equal(saved.alternate.num_ctx,4096);
+assert.equal(context.modelOptions({...cpu,model:'alternate',model_options:saved},'thinking-model').num_gpu,0);
+console.log('Per-model GPU and generation settings survive switching away and back.');

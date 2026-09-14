@@ -275,3 +275,21 @@ async def test_provider_redirect_does_not_forward_credentials(tmp_path):
     with pytest.raises(ValueError,match='HTTP 302'):
         await providers.models(Connection(id='fixture',kind='openai',url='https://provider.example/v1'))
     assert calls==['https://provider.example/v1/models']
+
+
+async def test_ollama_cpu_override_reaches_runtime_without_protocol_overrides(tmp_path):
+    seen=[]
+    def receive(request):
+        data=json.loads(request.content);seen.append(data)
+        return httpx.Response(200,json={'message':{'content':'READY'}})
+    p=Providers(Store(tmp_path),Tunnels(),httpx.MockTransport(receive))
+    assert await p.chat(Connection(url='http://localhost:11434',model='fixture-moe',options={'num_gpu':0,'num_ctx':8192,'model':'wrong','stream':True}),[{'role':'user','content':'Check'}])=='READY'
+    assert seen[0]['options']=={'num_gpu':0,'num_ctx':8192}
+    assert seen[0]['model']=='fixture-moe' and seen[0]['stream'] is False
+
+
+def test_model_profiles_survive_config_save(client):
+    identity=add(client,options={'num_gpu':0},model_options={'fixture-moe':{'num_gpu':0,'num_ctx':8192},'fixture-small':{'num_gpu':12}})
+    c=next(x for x in client.get('/api/state').json()['connections'] if x['id']==identity)
+    assert c['model_options']['fixture-moe']['num_gpu']==0
+    assert c['model_options']['fixture-small']['num_gpu']==12

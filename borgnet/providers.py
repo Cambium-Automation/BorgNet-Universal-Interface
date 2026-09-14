@@ -108,7 +108,7 @@ class Providers:
         if item.kind == "ollama":
             data = await self.request(item, "POST", "/api/chat", {"model": item.model, "stream": False,
                 **{k: v for k, v in item.options.items() if k in {"think", "keep_alive"}},
-                "options": {k: v for k, v in item.options.items() if k in {"num_ctx", "num_predict", "temperature", "top_p", "top_k"}},
+                "options": {k: v for k, v in item.options.items() if k in {"num_ctx", "num_predict", "num_gpu", "temperature", "top_p", "top_k"}},
                 "messages": ([{"role": "system", "content": system}] if system else []) + messages})
             answer = data.get("message", {}).get("content", "")
         elif item.kind == "openai":
