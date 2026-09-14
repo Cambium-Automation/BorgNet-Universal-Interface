@@ -12,6 +12,9 @@ from .subscription_images import create_subscription_images
 
 def register_images(app, root, store):
     generating = 0
+    from .local_images import LocalImages
+    local = LocalImages(root, store)
+    app.state.local_images = local
     api = create_image_api(root, store)
     native = create_subscription_images(root, store)
     api.register(app)
@@ -19,7 +22,7 @@ def register_images(app, root, store):
 
     @app.get('/api/images/imagegen/models')
     async def models():
-        return {'models': native.catalog() + await api.catalog()}
+        return {'models': local.catalog() + native.catalog() + await api.catalog()}
 
     @app.get('/api/images/imagegen/history')
     async def history():
@@ -39,6 +42,8 @@ def register_images(app, root, store):
     async def generate(request: Request):
         body = await request.json()
         adapter = native if str(body.get('model_id', '')).startswith('signedin::') else api
+        if body.get('model_id') == 'local::bonsai':
+            adapter = local
         nonlocal generating
         generating += 1
         replies = []

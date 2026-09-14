@@ -28,3 +28,4 @@ jobs:
       - run: node tests/image-feed.cjs
       - run: node tests/openrouter-import.cjs
       - run: node tests/media-responses.cjs
+      - run: node tests/image-source.cjs

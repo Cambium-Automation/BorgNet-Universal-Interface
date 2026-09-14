@@ -105,3 +105,36 @@ async def test_openrouter_image_key_reuse_and_endpoint(tmp_path,monkeypatch):
     assert '16:9' in images[0]['sizes']
     result=await api.generate({'model_id':'api::openrouter::vendor/image','prompt':'A lake','size':'16:9','quality':'high'})
     assert api.image_path(result['id']).read_bytes().startswith(b'\x89PNG')
+
+
+@pytest.mark.asyncio
+async def test_horde_transient_poll_failures_keep_same_job(monkeypatch):
+    from borgnet import horde_images
+    async def no_sleep(seconds): pass
+    monkeypatch.setattr(horde_images.asyncio, 'sleep', no_sleep)
+    calls=[]
+    def route(request):
+        calls.append(request)
+        if request.method == 'POST':return httpx.Response(202,json={'id':'same-job'})
+        checks=sum('/check/' in r.url.path for r in calls)
+        if '/check/' in request.url.path:
+            if checks==1:raise httpx.ReadTimeout('synthetic',request=request)
+            if checks==2:return httpx.Response(503,text='temporary gateway failure')
+            if checks==3:return httpx.Response(200,json={'done':False,'is_possible':False})
+            return httpx.Response(200,json={'done':True})
+        return httpx.Response(200,json={'generations':[{'img':'synthetic-inline','censored':False}]})
+    assert await generate('auto','synthetic','auto','',httpx.MockTransport(route))=='synthetic-inline'
+    assert sum(r.method=='POST' for r in calls)==1
+    assert not any(r.method=='DELETE' for r in calls)
+    assert horde_images.QUEUE_TIMEOUT == 1200
+
+
+@pytest.mark.asyncio
+async def test_horde_submission_timeout_is_not_retried():
+    calls=[]
+    def route(request):
+        calls.append(request)
+        raise httpx.ReadTimeout('synthetic',request=request)
+    with pytest.raises(httpx.ReadTimeout):
+        await generate('auto','synthetic','auto','',httpx.MockTransport(route))
+    assert len(calls)==1

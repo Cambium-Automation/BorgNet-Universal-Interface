@@ -150,6 +150,16 @@ class Providers:
         return sorted(names)
 
     async def chat(self, item, messages, system="", response_schema=None):
+        from .local_images import LocalImages, model_gate
+        local = LocalImages(self.store.root, self.store)
+        cfg = local.settings()
+        if cfg.get('ready') and not item.ssh and item.url.rstrip('/') == 'http://127.0.0.1:18081/v1':
+            await local.bitnet('start')
+            with model_gate(cfg['lock_path']):
+                return await self._chat(item, messages, system, response_schema)
+        return await self._chat(item, messages, system, response_schema)
+
+    async def _chat(self, item, messages, system="", response_schema=None):
         if not item.model:
             raise ValueError("Select a discovered model or enter a model ID first")
         if item.url == 'https://openrouter.ai/api/v1' and item.options.get('free_only'):
