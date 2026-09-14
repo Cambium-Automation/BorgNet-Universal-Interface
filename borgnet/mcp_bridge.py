@@ -12,7 +12,7 @@ from mcp.server.fastmcp import FastMCP
 
 
 @asynccontextmanager
-async def session(source, store):
+async def session(source, store, with_capabilities=False):
     if source.transport == "stdio":
         if not source.command:
             raise ValueError("Set an installed MCP command and its argument list")
@@ -27,18 +27,20 @@ async def session(source, store):
             timeout=timedelta(seconds=30), sse_read_timeout=timedelta(seconds=90))
     async with transport as streams:
         async with ClientSession(streams[0], streams[1], read_timeout_seconds=timedelta(seconds=90)) as client:
-            await client.initialize()
-            yield client
+            initialized = await client.initialize()
+            yield (client, initialized.capabilities) if with_capabilities else client
 
 
 async def inspect_source(source, store):
     async with asyncio.timeout(90):
-        async with session(source, store) as client:
+        async with session(source, store, with_capabilities=True) as (client, capabilities):
             tools, resources = [], []
             # Some MCP servers implement only one capability; respect negotiated capabilities.
             # Method-not-found is the only optional-method failure suppressed.
             from mcp.shared.exceptions import McpError
             for method, target, attr in [(client.list_tools, tools, "tools"), (client.list_resources, resources, "resources")]:
+                if getattr(capabilities, attr, None) is None:
+                    continue
                 cursor = None
                 try:
                     for _ in range(20):
