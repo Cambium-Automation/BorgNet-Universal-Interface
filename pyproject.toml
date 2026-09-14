@@ -7,7 +7,7 @@ name = "borgnet-universal-interface"
 version = "0.1.0"
 description = "A local-first glass workspace for your models, computers, APIs, and shared MCP context."
 requires-python = ">=3.11"
-dependencies = ["fastapi>=0.141.1,<1", "uvicorn>=0.53.0,<1", "httpx>=0.28.1,<1", "mcp>=1.30.0,<2", "playwright==1.62.0", "Pillow==12.3.0", "mss==10.2.0", "pyobjc-framework-Quartz==12.2.2; sys_platform == 'darwin'", "python-xlib==0.33; sys_platform == 'linux'"]
+dependencies = ["fastapi>=0.141.1,<1", "uvicorn>=0.53.0,<1", "httpx>=0.28.1,<1", "mcp>=1.30.0,<3", "playwright==1.62.0", "Pillow==12.3.0", "mss==10.2.0", "pyobjc-framework-Quartz==12.2.2; sys_platform == 'darwin'", "python-xlib==0.33; sys_platform == 'linux'"]
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2"]
