@@ -22,6 +22,20 @@ def test_inheritance_and_api_limits(tmp_path):
     assert not effective(store, item()).full_access
 
 
+def test_openai_host_tools_require_explicit_connection_override(tmp_path):
+    store = Store(tmp_path)
+    config = store.config()
+    config['permissions'] = Permissions(defaults=Policy(workspace=str(tmp_path), full_access=True,
+        browser=True, computer=True)).model_dump()
+    store.write('config', config)
+    assert not effective(store, item(kind='openai')).full_access
+    config['permissions']['overrides']['test'] = Policy(workspace=str(tmp_path), full_access=True,
+        browser=True, computer=True).model_dump()
+    store.write('config', config)
+    assert effective(store, item(kind='openai')).computer
+    assert effective(store, item(kind='ollama')).browser
+
+
 def test_workspace_validation(tmp_path):
     assert Policy(workspace=str(tmp_path)).workspace == str(tmp_path.resolve())
     with pytest.raises(ValueError): Policy(workspace=str(tmp_path/'missing'))

@@ -92,10 +92,15 @@ def test_desktop_rejects_actions_without_observation(monkeypatch):
     with pytest.raises(ValueError,match='fresh'):Desktop().click(0,0)
 
 
-def test_adapter_status_endpoint_requires_session(tmp_path):
+def test_adapter_status_endpoint_requires_session(tmp_path,monkeypatch):
     from borgnet.server import create_app
     from fastapi.testclient import TestClient
     app=create_app(tmp_path)
+    monkeypatch.setattr('borgnet.desktop_adapter.request_access',lambda:{'supported':True,'ready':False})
     with TestClient(app,base_url='http://127.0.0.1') as client:
         assert client.get('/api/adapters').status_code==401
         assert client.post('/api/adapters/browser-test').status_code==401
+        assert client.post('/api/adapters/computer-request').status_code==401
+        client.headers['X-BorgNet-Session']=app.state.session_token
+        token=client.get('/api/state').json()['token']
+        assert client.post('/api/adapters/computer-request',headers={'X-BorgNet-Token':token}).json()=={'supported':True,'ready':False}

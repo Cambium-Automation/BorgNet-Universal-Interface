@@ -37,6 +37,12 @@ def effective(store, item):
         return Policy()
     settings = Permissions.model_validate(store.config().get('permissions', {}))
     policy = settings.overrides.get(item.id, settings.defaults)
+    # API transports never inherit host access from shared CLI defaults. An
+    # explicit per-connection grant is required because the model may be remote.
+    if item.kind in {'openai', 'ollama'}:
+        if item.id not in settings.overrides or not policy.full_access:
+            return Policy(workspace=policy.workspace)
+        return policy
     if item.kind != 'cli' or item.cli_provider == 'gemini':
         return Policy(workspace=policy.workspace)
     if item.cli_provider == 'copilot' and not policy.full_access:

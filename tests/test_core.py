@@ -213,7 +213,8 @@ def test_context_and_followup_reach_only_selected_provider(tmp_path):
         client.post('/api/dispatch',json={'collaborate':False,'prompt':'Follow up','connections':[identity],'conversation':conversation})
         assert 'Selected reference text' in json.dumps(calls[0])
         assert 'Do not transmit this' not in json.dumps(calls)
-        assert calls[1]['messages'][0]=={'role':'system','content':'Fixture purpose'}
+        assert calls[1]['messages'][0]['role']=='system'
+        assert calls[1]['messages'][0]['content'].startswith('Fixture purpose\n\nBORGNET CONNECTION FACTS')
         assert any(m['role']=='assistant' and m['content']=='Fixture answer' for m in calls[1]['messages'])
 
 

@@ -60,6 +60,24 @@ def test_changed_destination_cannot_reuse_secret(tmp_path):
         assert app.state.store.read('secrets',{})[identity]=='replacement'
 
 
+def test_entered_key_overrides_preset_environment_without_breaking_env_only(tmp_path, monkeypatch):
+    monkeypatch.setenv('GROQ_API_KEY', 'different-env-fixture')
+    app = create_app(tmp_path)
+    with TestClient(app) as owner:
+        owner.headers['X-BorgNet-Token'] = owner.get('/api/state').json()['token']
+        preset = {'kind': 'openai', 'url': 'https://api.groq.com/openai/v1', 'key_env': 'GROQ_API_KEY'}
+        identity = owner.post('/api/connections', json={**preset, 'api_key': 'saved-fixture'}).json()['id']
+        item = Connection(**app.state.store.config()['connections'][0])
+        assert item.key_env == ''
+        assert app.state.store.secret(item) == 'saved-fixture'
+        assert owner.post('/api/connections', json={**item.model_dump(), 'api_key': None}).status_code == 200
+        assert app.state.store.secret(item) == 'saved-fixture'
+        env_id = owner.post('/api/connections', json=preset).json()['id']
+        env_item = Connection(**next(c for c in app.state.store.config()['connections'] if c['id'] == env_id))
+        assert app.state.store.secret(env_item) == 'different-env-fixture'
+        assert identity != env_id
+
+
 @pytest.mark.asyncio
 async def test_provider_reply_limit(tmp_path):
     class Oversized(httpx.AsyncByteStream):

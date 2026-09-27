@@ -21,11 +21,12 @@ WEB = Path(__file__).parent / "web"
 
 
 class Dispatch(BaseModel):
-    prompt: str = Field(min_length=1, max_length=50000)
+    prompt: str = Field(min_length=1, max_length=100000)
     connections: list[str] = Field(min_length=1, max_length=MAX_CONNECTIONS)
     contexts: list[str] = Field(default_factory=list, max_length=32)
     conversation: str = Field(default="", max_length=64)
     synthesize: str = Field(default="", max_length=64)
+    auto_select: bool = False
     collaborate: bool = True
     collaboration_mode: Literal["review", "debate"] = "review"
     debate_rounds: int = Field(default=3, ge=1, le=6)
@@ -100,6 +101,9 @@ def create_app(root: Path, provider_transport=None):
     async def save_connection(request: Request):
         data = await request.json()
         item = Connection(**data)
+        # Pasted credentials select local storage, overriding a preset's env hint.
+        if data.get('api_key') and item.kind != 'cli':
+            item.key_env = ''
         item.id = item.id or uuid.uuid4().hex
         if item.id in active:
             raise ValueError("Wait for the active request before editing this connection")
@@ -265,6 +269,11 @@ def create_app(root: Path, provider_transport=None):
         from .adapter_setup import status
         return await asyncio.to_thread(status)
 
+    @app.post("/api/adapters/computer-request")
+    async def request_computer_access():
+        from .desktop_adapter import request_access
+        return await asyncio.to_thread(request_access)
+
     @app.get("/api/permissions")
     async def get_permissions():
         return Permissions.model_validate(store.config().get("permissions", {})).model_dump()
@@ -291,15 +300,39 @@ def create_app(root: Path, provider_transport=None):
             if "theme" in data:
                 config["theme"] = data["theme"]
             if "synthesis" in data:
-                if data["synthesis"] and data["synthesis"] != "__independent__" and data["synthesis"] not in {c["id"] for c in config["connections"]}:
+                if data["synthesis"] and data["synthesis"] not in {"__independent__", "__route__", "__single__"} and data["synthesis"] not in {c["id"] for c in config["connections"]}:
                     raise ValueError("Select a configured synthesis connection")
                 config["synthesis"] = data["synthesis"]
             store.write("config", config)
         return {"ok": True}
 
+    @app.post("/api/routing")
+    async def save_routing(request: Request):
+        from .routing import Routing
+        if active:
+            raise ValueError("Wait for active requests before changing the selector")
+        data = await request.json()
+        key = data.pop('api_key', None)
+        cfg = Routing.model_validate(data)
+        if cfg.backend == 'connection':
+            item = find(cfg.selector)
+            if not item.enabled or not item.model or item.kind not in {'ollama', 'openai'}:
+                raise ValueError("Choose an enabled Ollama or OpenAI-compatible selector")
+        if key is not None and (not isinstance(key, str) or len(key) > 4096):
+            raise ValueError("Invalid TypeSafe API key")
+        with store.lock:
+            config = store.config()
+            config['routing'] = cfg.model_dump()
+            if key is not None:
+                store.save_secret('__jev_router__', key)
+            store.write('config', config)
+        return {'ok': True}
+
     @app.post("/api/dispatch")
     async def dispatch(data: Dispatch):
-        if data.collaborate and len(data.prompt) > 12000:
+        if data.auto_select and (data.implement or data.synthesize):
+            raise ValueError("Auto select cannot be combined with synthesis or debate implementation")
+        if not data.auto_select and data.collaborate and len(data.prompt) > 12000:
             raise ValueError("Collaborative requests support up to 12,000 prompt characters; narrow the request or use independent answers")
         selected = [find(identity) for identity in dict.fromkeys(data.connections)]
         if any(not c.enabled or not c.model for c in selected):
@@ -308,7 +341,7 @@ def create_app(root: Path, provider_transport=None):
             raise ValueError("A selected connection is already busy")
         if data.synthesize and data.synthesize not in {c.id for c in selected}:
             raise ValueError("Choose a selected connection to synthesize")
-        if data.collaboration_mode == 'debate':
+        if not data.auto_select and data.collaboration_mode == 'debate':
             if not data.collaborate or not 2 <= len(selected) <= 8:
                 raise ValueError("Debate requires 2–8 enabled models")
             if data.implement:
@@ -324,12 +357,32 @@ def create_app(root: Path, provider_transport=None):
             raise ValueError("Selected context is too large; attach fewer items")
         conversation = data.conversation or uuid.uuid4().hex
         prior = [r for r in store.read("history", []) if r["conversation"] == conversation][-8:]
+        reserved = {c.id for c in selected}
+        routing = None
+        if data.auto_select:
+            from .routing import choose, Routing
+            cfg = Routing.model_validate(store.config().get('routing', {}))
+            if cfg.backend == 'connection' and len(selected) > 1:
+                if cfg.selector in active:
+                    raise ValueError("The selector model is already busy")
+                reserved.add(cfg.selector)
+            active.update(reserved)
+            try:
+                chosen, routing = await choose(providers, store, selected, data.prompt, context_text, prior)
+                selected = [chosen]
+                data.collaborate = False
+            except BaseException:
+                active.difference_update(reserved)
+                raise
+            active.difference_update(reserved - {chosen.id})
         active.update(c.id for c in selected)
 
         async def events():
             queue = asyncio.Queue(maxsize=256)
             record = {"id": uuid.uuid4().hex, "conversation": conversation, "created_at": time.time(),
                       "prompt": data.prompt, "results": [], "context_titles": [c["title"] for c in contexts]}
+            if routing:
+                record['routing'] = routing
             async def run(item):
                 result = {"connection": item.id, "address": item.address, "model": item.model, "purpose": item.purpose}
                 await queue.put({"type": "started", **result})
@@ -338,6 +391,8 @@ def create_app(root: Path, provider_transport=None):
                     messages = []
                     for previous in prior:
                         response = next((r for r in previous["results"] if r["connection"] == item.id and r.get("text") and not r.get("synthesis")), None)
+                        if routing and not response:
+                            response = next((r for r in previous['results'] if r.get('text') and r.get('status') == 'complete'), None)
                         if response:
                             messages += [{"role": "user", "content": previous["prompt"]}, {"role": "assistant", "content": response["text"]}]
                     prompt = data.prompt
@@ -346,8 +401,19 @@ def create_app(root: Path, provider_transport=None):
                     messages.append({"role": "user", "content": prompt})
                     async def delta(text):
                         await queue.put({'type':'delta', **result, 'text':text})
-                    await queue.put({'type':'stream-reset', **result, 'mode':'buffered' if item.kind == 'cli' and item.cli_provider in {'codex','gemini'} else 'live'})
-                    result["text"] = await providers.stream_chat(item, messages, item.purpose, on_delta=delta)
+                    async def reasoning(text):
+                        await queue.put({'type':'reasoning', 'connection':item.id, 'model':item.model, 'text':text})
+                    async def tool_used(name, ok):
+                        result.setdefault('tools', []).append({'name':name, 'ok':ok})
+                        await queue.put({'type':'tool', 'connection':item.id, 'model':item.model,
+                                         'name':name, 'ok':ok})
+                    from .permissions import effective
+                    tool_mode = item.kind in {'openai', 'ollama'} and effective(store, item).full_access
+                    mode = ('buffered-tools' if tool_mode else 'buffered' if item.kind == 'cli' and
+                            item.cli_provider in {'codex','gemini'} else 'live')
+                    await queue.put({'type':'stream-reset', **result, 'mode':mode})
+                    result["text"] = await providers.stream_chat(item, messages, item.purpose, on_delta=delta,
+                                                                 on_tool=tool_used, on_reasoning=reasoning)
                     result["status"] = "complete"
                 except Exception as error:
                     result.update(status="error", error=str(error) if isinstance(error, ValueError) else "Provider request failed")
@@ -368,6 +434,8 @@ def create_app(root: Path, provider_transport=None):
                 return
             tasks = [asyncio.create_task(run(c)) for c in selected]
             try:
+                if routing:
+                    yield json.dumps({"type": "routing", **routing}) + "\n"
                 yield json.dumps({"type": "run", "conversation": conversation}) + "\n"
                 pending = len(tasks)
                 while pending:

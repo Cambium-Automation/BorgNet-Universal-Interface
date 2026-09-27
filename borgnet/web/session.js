@@ -20,17 +20,51 @@
     form.addEventListener('submit', event => { event.preventDefault(); try { const url = new URL(input.value); const value = new URLSearchParams(url.hash.slice(1)).get('session'); if (url.origin !== location.origin || !value) throw Error(); sessionStorage.setItem('borgnet-session', value); location.reload(); } catch { note.textContent = 'Paste the private launch link for this workspace.'; } });
     dialog.addEventListener('cancel', event => event.preventDefault()); dialog.showModal();
   }
-  const ready = originalFetch('/api/session', {headers: {'X-BorgNet-Session': session}}).then(async response => {
-    if (!response.ok) { locked(); return false; }
-    media = (await response.json()).media_token; return true;
-  }).catch(() => { locked(); return false; });
+  let writeToken = '', renewing;
+  async function authenticate(renew = false) {
+    const bridge = window.webkit?.messageHandlers?.borgnetSession;
+    if (renew && bridge) {
+      session = await bridge.postMessage({});
+      try { sessionStorage.setItem('borgnet-session', session); } catch {}
+    }
+    const response = await originalFetch('/api/session', {headers: {'X-BorgNet-Session': session}});
+    if (response.status === 401 && !renew && bridge) return authenticate(true);
+    if (!response.ok) {
+      if (response.status === 401) locked();
+      throw Error(response.status === 401 ? 'Workspace locked. Use your private launch link.' : 'BorgNet is temporarily unavailable. Try again.');
+    }
+    media = (await response.json()).media_token;
+    if (renew) {
+      const stateResponse = await originalFetch('/api/state', {headers: {'X-BorgNet-Session': session}});
+      if (!stateResponse.ok) throw Error('Could not reconnect to BorgNet. Try again.');
+      writeToken = (await stateResponse.json()).token;
+      document.getElementById('sessionDialog')?.remove();
+    }
+  }
+  // Handle initial rejection without an unhandled promise; a later request may retry.
+  let ready = authenticate().then(() => true, () => false);
+  function reconnect() {
+    if (!renewing) renewing = authenticate(true).finally(() => { renewing = null; });
+    return renewing;
+  }
   window.fetch = async (input, options = {}) => {
     const url = new URL(input instanceof Request ? input.url : input, location.href);
     if (url.origin === location.origin && url.pathname.startsWith('/api/')) {
-      if (!await ready) throw Error('Workspace locked. Use your private launch link.');
+      if (!await ready) {
+        await reconnect(); ready = Promise.resolve(true);
+      }
       const headers = new Headers(options.headers || (input instanceof Request ? input.headers : undefined));
       headers.set('X-BorgNet-Session', session);
-      const response = await originalFetch(input, {...options, headers});
+      if (writeToken && headers.has('X-BorgNet-Token')) headers.set('X-BorgNet-Token', writeToken);
+      // Preserve a replayable Request; only retry a 401 rejected by the boundary.
+      const retryInput = input instanceof Request ? input.clone() : input;
+      let response = await originalFetch(input, {...options, headers});
+      if (response.status === 401 && window.webkit?.messageHandlers?.borgnetSession) {
+        await reconnect();
+        headers.set('X-BorgNet-Session', session);
+        if (writeToken && headers.has('X-BorgNet-Token')) headers.set('X-BorgNet-Token', writeToken);
+        response = await originalFetch(retryInput, {...options, headers});
+      }
       if (response.status === 401) locked();
       return response;
     }

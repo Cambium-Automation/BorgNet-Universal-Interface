@@ -2,11 +2,14 @@
 import asyncio
 import socket
 import json
+from contextvars import ContextVar
 from pathlib import Path
 from urllib.parse import urlsplit, quote
 import httpx
 from .cli_text import CLIText, models as cli_models
-from .streaming import listener, stream_request
+from .streaming import listener, reasoning_listener, reasoning_eligible, stream_request, context_error
+
+tool_listener = ContextVar('borgnet_tool_listener', default=None)
 
 
 class Tunnels:
@@ -65,16 +68,21 @@ class Tunnels:
 
 
 class Providers:
+    supports_reasoning_events = True
     def __init__(self, store, tunnels, transport=None):
         self.store, self.tunnels, self.transport = store, tunnels, transport
         self.cli = CLIText()
 
-    async def stream_chat(self, item, messages, system='', response_schema=None, on_delta=None):
+    async def stream_chat(self, item, messages, system='', response_schema=None, on_delta=None, on_tool=None, on_reasoning=None):
         marker = listener.set(on_delta)
+        tool_marker = tool_listener.set(on_tool)
+        reasoning_marker = reasoning_listener.set(on_reasoning)
         try:
             return await self.chat(item, messages, system, response_schema=response_schema)
         finally:
             listener.reset(marker)
+            tool_listener.reset(tool_marker)
+            reasoning_listener.reset(reasoning_marker)
 
     async def request(self, item, method, path, payload=None, timeout=None):
         base = await self.tunnels.url(item)
@@ -94,7 +102,8 @@ class Providers:
         async with httpx.AsyncClient(transport=self.transport, timeout=timeout or item.timeout, follow_redirects=False, trust_env=False) as client:
             try:
                 if listener.get() is not None and method == 'POST' and path != '/api/pull':
-                    return await stream_request(client, item.kind, method, base + path, payload, headers, listener.get())
+                    return await stream_request(client, item.kind, method, base + path, payload, headers,
+                                                listener.get(), reasoning_listener.get() if reasoning_eligible(item) else None)
                 async with client.stream(method, base + path, json=payload, headers=headers) as response:
                     raw = bytearray()
                     async for chunk in response.aiter_bytes():
@@ -104,6 +113,9 @@ class Providers:
             except httpx.HTTPError:
                 raise ValueError("Endpoint unreachable or timed out; check its URL, service, and tunnel.") from None
             if response.is_error or response.is_redirect:
+                detail = context_error(raw) if len(raw) <= 4096 else None
+                if detail:
+                    raise ValueError(detail)
                 if item.kind == "gemini":
                     messages = {
                         400: "Gemini rejected the request. Check the API key, model ID, and request options.",
@@ -165,9 +177,19 @@ class Providers:
         if item.url == 'https://openrouter.ai/api/v1' and item.options.get('free_only'):
             if item.model != 'openrouter/free' and not item.model.endswith(':free'):
                 raise ValueError('This OpenRouter connection is restricted to free models. Choose openrouter/free or a :free model.')
+        from .capability_context import briefing
+        facts = briefing(self.store, item, host_tools=response_schema is None)
+        if facts:
+            system = system + '\n\n' + facts if system else facts
         if item.kind == "cli":
             from .permissions import effective
             return await self.cli.chat(item, messages, system, response_schema, on_delta=listener.get(), policy=effective(self.store, item))
+        if response_schema is None and item.kind in {'openai', 'ollama'}:
+            from .permissions import effective
+            policy = effective(self.store, item)
+            if policy.full_access:
+                from .local_tools import chat_with_tools
+                return await chat_with_tools(self, item, messages, system, policy, listener.get(), tool_listener.get())
         if item.kind == "ollama":
             data = await self.request(item, "POST", "/api/chat", {"model": item.model, "stream": False,
                 **({"format": response_schema} if response_schema is not None else {}),

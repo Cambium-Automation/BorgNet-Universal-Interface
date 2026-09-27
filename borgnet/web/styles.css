@@ -44,6 +44,9 @@ dialog{border-radius:12px}
 .model-status[data-status=error] .model-name,.model-status[data-status=error] .model-working{color:var(--error)}
 .conference-body{padding:0 12px 4px;max-height:55vh;overflow:auto;border-top:1px solid var(--line)}
 .conference-body .result{margin:12px 0;background:transparent}
+.model-reasoning{margin:12px 16px 0;padding:12px 14px;border:1px solid color-mix(in srgb,var(--accent) 30%,var(--line));border-radius:7px;background:color-mix(in srgb,var(--accent) 6%,transparent)}
+.model-reasoning h4{margin:0 0 8px;font-size:11px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;color:var(--accent)}
+.reasoning-text{max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.55 ui-monospace,SFMono-Regular,monospace;color:var(--text);opacity:.85}
 @media(max-width:720px){.conference-bar{gap:9px;padding:11px}.conference-label{display:none}}
 
 .connection-toggle{display:inline-flex;align-items:center;gap:7px;border:0;background:transparent;padding:4px 0 4px 6px;flex-shrink:0;min-height:32px}.toggle-label{font-size:11px;color:var(--muted)}.toggle-track{position:relative;display:block;width:36px;height:22px;border-radius:999px;background:var(--input);border:1px solid var(--muted);transition:background .15s}.toggle-track::after{content:"";position:absolute;left:3px;top:3px;width:14px;height:14px;border-radius:50%;background:var(--muted);transition:transform .15s}.connection-toggle[aria-checked=true] .toggle-track{background:var(--accent);border-color:var(--accent)}.connection-toggle[aria-checked=true] .toggle-track::after{transform:translateX(14px);background:var(--accent-text)}.connection-toggle[aria-checked=true] .toggle-label{color:var(--accent)}

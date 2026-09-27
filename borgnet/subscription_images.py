@@ -22,9 +22,10 @@ def create_subscription_images(root,state_store):
  def no_image_message(events):
   """Only show public assistant output, never tool arguments or reasoning."""
   messages=[]
-  for line in events.splitlines():
+  for line in [events, *events.splitlines()]:
    try:record=json.loads(line)
    except (ValueError,TypeError):continue
+   if not isinstance(record,dict):continue
    item=record.get('item',{})
    if record.get('type')=='item.completed' and item.get('type')=='agent_message':
     messages.append(str(item.get('text','')))
@@ -46,6 +47,11 @@ def create_subscription_images(root,state_store):
    argv=[shutil.which('codex'),'exec','--ignore-user-config','--ephemeral','--skip-git-repo-check','--sandbox','workspace-write','--disable','shell_tool','--disable','plugins','-C',str(job),'--json',instruction]
    if identity=='signedin::grok':
     instruction='Use your native image_gen tool to generate exactly one image from this request. Do not use MCP servers, new API keys, or unrelated files. Return the generated image path. IMAGE REQUEST: '+prompt
+    skill=Path(os.environ.get('GROK_HOME',str(Path.home()/'.grok'))).expanduser()/'bundled/skills/imagine/SKILL.md'
+    if skill.is_file():
+     guidance=skill.read_text()
+     if len(guidance)>40000:raise ValueError('Installed Grok image instructions exceed the size limit')
+     instruction='The installed imagine skill has already been loaded below; apply it directly without trying to read it again.\n\n'+guidance+'\n\n'+instruction
     argv=[shutil.which('grok'),'--cwd',str(job),'--output-format','json','--max-turns','4','--no-plan','--no-subagents','--disable-web-search','--sandbox','workspace','--tools','image_gen','--deny','MCPTool','--allow','image_gen','--permission-mode','dontAsk','-p',instruction]
    start=time.monotonic()
    with (job/'events.jsonl').open('wb') as out,(job/'stderr.log').open('wb') as err:

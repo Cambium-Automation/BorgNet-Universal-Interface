@@ -1,5 +1,6 @@
 """Bounded proposals, independent peer ballots, ranking, and a checked final decision."""
 import asyncio
+import inspect
 import json
 import math
 import time
@@ -84,11 +85,14 @@ async def collaborate(providers, selected, prompt, context, prior, coordinator_i
     async def call(item, messages, system, schema=None, phase='proposal'):
         async def delta(text):
             await queue.put({'type':'delta', **metadata(item, phase), 'text':text})
+        async def reasoning(text):
+            await queue.put({'type':'reasoning', **metadata(item, phase), 'text':text})
         await queue.put({'type':'stream-reset', **metadata(item, phase),
                          'mode':'buffered' if item.kind == 'cli' and item.cli_provider in {'codex','gemini'} else 'live'})
         async with asyncio.timeout(min(item.timeout, deadline)):
             if hasattr(providers, 'stream_chat'):
-                return await providers.stream_chat(item, messages, system, response_schema=schema, on_delta=delta)
+                kwargs = {'on_reasoning':reasoning} if 'on_reasoning' in inspect.signature(providers.stream_chat).parameters else {}
+                return await providers.stream_chat(item, messages, system, response_schema=schema, on_delta=delta, **kwargs)
             return await providers.chat(item, messages, system, response_schema=schema)
 
     def metadata(item, phase):

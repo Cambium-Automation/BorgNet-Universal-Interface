@@ -1,0 +1,56 @@
+#!/bin/bash
+set -euo pipefail
+
+if [[ "$(/usr/bin/id -u)" != 0 ]]; then
+  echo 'Run this installer with sudo in Terminal after verifying its SHA-256.' >&2
+  exit 1
+fi
+
+SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ARCHIVE="$SOURCE/BorgNet-E-Stop.zip"
+MANIFEST="$SOURCE/BorgNet-E-Stop.sha256"
+DEST='/Applications/BorgNet E-Stop.app'
+TRUST='/Library/Application Support/BorgNet E-Stop'
+EXPECTED='__MANIFEST_SHA256__'
+EXPECTED_ARCHIVE='__ARCHIVE_SHA256__'
+STAGING="$(/usr/bin/mktemp -d '/private/var/root/borgnet-estop-install.XXXXXX')"
+trap '/bin/rm -rf "$STAGING"' EXIT
+
+if [[ -e "$DEST" || -e "$TRUST" ]]; then
+  echo 'A protected E-stop installation already exists; refusing to overwrite it.' >&2
+  exit 1
+fi
+
+# Copy into a root-only directory before verification. User-level models cannot
+# swap the archive between verification and installation.
+/bin/cp "$ARCHIVE" "$STAGING/archive.zip"
+/bin/cp "$MANIFEST" "$STAGING/manifest.sha256"
+ACTUAL="$(/usr/bin/shasum -a 256 "$STAGING/manifest.sha256" | /usr/bin/awk '{print $1}')"
+if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+  echo 'Manifest SHA-256 mismatch; refusing installation.' >&2
+  exit 1
+fi
+ARCHIVE_HASH="$(/usr/bin/shasum -a 256 "$STAGING/archive.zip" | /usr/bin/awk '{print $1}')"
+if [[ "$ARCHIVE_HASH" != "$EXPECTED_ARCHIVE" ]]; then
+  echo 'Archive SHA-256 mismatch; refusing installation.' >&2
+  exit 1
+fi
+/usr/bin/ditto -x -k "$STAGING/archive.zip" "$STAGING"
+APP="$STAGING/BorgNet E-Stop.app"
+(cd "$STAGING" && /usr/bin/shasum -a 256 -c "$STAGING/manifest.sha256" >/dev/null)
+/usr/bin/codesign --verify --deep --strict "$APP"
+
+/usr/bin/ditto "$APP" "$DEST"
+/usr/sbin/chown -R root:wheel "$DEST"
+/usr/bin/find "$DEST" -type d -exec /bin/chmod 755 {} +
+/usr/bin/find "$DEST" -type f -exec /bin/chmod 644 {} +
+/bin/chmod 755 "$DEST/Contents/MacOS/BorgNetEStop"
+/usr/bin/install -d -o root -g wheel -m 755 "$TRUST"
+/usr/bin/install -o root -g wheel -m 444 "$STAGING/manifest.sha256" "$TRUST/SHA256SUMS"
+/usr/bin/chflags -R uchg "$DEST"
+/usr/bin/chflags uchg "$TRUST/SHA256SUMS"
+
+(cd /Applications && /usr/bin/shasum -a 256 -c "$TRUST/SHA256SUMS" >/dev/null)
+/usr/bin/codesign --verify --deep --strict "$DEST"
+echo "Protected E-stop installed at $DEST"
+echo 'The app and trusted SHA-256 manifest are root-owned and immutable.'

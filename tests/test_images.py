@@ -79,6 +79,10 @@ async def test_grok_image_tool_cannot_call_mcp(monkeypatch, tmp_path):
     store.write('config',config)
     monkeypatch.delenv('BORGNET_GROK_IMAGES', raising=False)
     monkeypatch.setattr('borgnet.subscription_images.shutil.which', lambda name: name)
+    skill=tmp_path/'grok/bundled/skills/imagine/SKILL.md'
+    skill.parent.mkdir(parents=True)
+    skill.write_text('Fixture image skill: use image_gen directly.')
+    monkeypatch.setenv('GROK_HOME',str(tmp_path/'grok'))
     calls = []
     async def capture(*argv, **kwargs):
         calls.append(argv)
@@ -88,6 +92,8 @@ async def test_grok_image_tool_cannot_call_mcp(monkeypatch, tmp_path):
         await create_subscription_images(tmp_path,store).generate({'model_id':'signedin::grok','prompt':'test'})
     assert calls[0][calls[0].index('--deny')+1] == 'MCPTool'
     assert calls[0][calls[0].index('--tools')+1] == 'image_gen'
+    assert 'Fixture image skill: use image_gen directly.' in calls[0][-1]
+    assert 'already been loaded' in calls[0][-1]
 
 
 def test_clear_image_history_requires_confirmation_and_stays_in_library(tmp_path):
@@ -108,3 +114,10 @@ def test_clear_image_history_requires_confirmation_and_stays_in_library(tmp_path
         assert client.post(route,json={'confirm':True}).status_code==200
         assert not image.exists() and outside.read_text()=='keep'
         assert client.get('/api/images/imagegen/history').json()=={'images':[],'trash':[]}
+
+
+def test_grok_pretty_json_failure_is_visible(tmp_path):
+    import json
+    app=create_app(tmp_path/'state')
+    message=app.state.image_native.no_image_message(json.dumps({'sessionId':'fixture','text':'Image quota exhausted.'},indent=2))
+    assert 'Image quota exhausted.' in message

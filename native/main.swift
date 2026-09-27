@@ -51,7 +51,7 @@ func focusFrostAlpha(isKeyWindow: Bool) -> CGFloat {
 }
 
 
-final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
+final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKScriptMessageHandlerWithReply {
     private var workspaceURL: URL?
     private var window: NSWindow!
     private var webView: WKWebView!
@@ -67,6 +67,95 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var fallbackMaterial: NSVisualEffectView?
     private let zoomSteps: [Double] = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
     private var zoomLabel: NSMenuItem?
+    private var attachedEStop: Process?
+    private var eStopWatchTimer: Timer?
+    private var eStopMenuItem: NSMenuItem?
+    private var lastEStopLaunchAttempt = Date.distantPast
+    private var eStopExecutable: URL {
+        #if DEBUG
+        // Test builds can exercise the lifecycle without a root installation.
+        if let path = ProcessInfo.processInfo.environment["BORGNET_TEST_ESTOP_EXECUTABLE"] {
+            return URL(fileURLWithPath: path)
+        }
+        #endif
+        return URL(fileURLWithPath: "/Applications/BorgNet E-Stop.app/Contents/MacOS/BorgNetEStop")
+    }
+
+    private var protectedEStopAvailable: Bool {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["BORGNET_TEST_ESTOP_EXECUTABLE"] != nil {
+            return FileManager.default.isExecutableFile(atPath: eStopExecutable.path)
+        }
+        #endif
+        let appPath = "/Applications/BorgNet E-Stop.app"
+        var appInfo = stat()
+        var executableInfo = stat()
+        return lstat(appPath, &appInfo) == 0 &&
+            lstat(eStopExecutable.path, &executableInfo) == 0 &&
+            appInfo.st_uid == 0 && executableInfo.st_uid == 0 &&
+            (appInfo.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR) &&
+            (executableInfo.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) &&
+            (appInfo.st_mode & 0o022) == 0 &&
+            (executableInfo.st_mode & 0o022) == 0 &&
+            (appInfo.st_flags & UInt32(UF_IMMUTABLE)) != 0 &&
+            (executableInfo.st_flags & UInt32(UF_IMMUTABLE)) != 0 &&
+            FileManager.default.isExecutableFile(atPath: eStopExecutable.path)
+    }
+
+    private func refreshEStopStatus() {
+        let available = protectedEStopAvailable
+        eStopMenuItem?.title = available ? "Show E-Stop" : "E-Stop: Installation Required…"
+        window?.title = available
+            ? "BorgNet Universal Interface"
+            : "BorgNet Universal Interface — E-Stop Installation Required"
+    }
+
+    private func launchAttachedEStop(show: Bool) {
+        if let existing = attachedEStop, existing.isRunning {
+            if show { activateAttachedEStop() }
+            return
+        }
+        refreshEStopStatus()
+        guard protectedEStopAvailable else {
+            if show { showEStopUnavailable("Install the root-protected BorgNet E-Stop app in /Applications to enable it.") }
+            return
+        }
+        guard show || Date().timeIntervalSince(lastEStopLaunchAttempt) >= 2 else { return }
+        lastEStopLaunchAttempt = Date()
+        let process = Process()
+        process.executableURL = eStopExecutable
+        process.arguments = ["--borgnet-owner-pid", String(getpid())]
+        do {
+            try process.run()
+            attachedEStop = process
+            if show { activateAttachedEStop() }
+        } catch {
+            if show { showEStopUnavailable("Could not open BorgNet E-Stop: \(error.localizedDescription)") }
+        }
+    }
+
+    private func activateAttachedEStop(attempt: Int = 0) {
+        guard let process = attachedEStop, process.isRunning else { return }
+        if let app = NSRunningApplication(processIdentifier: process.processIdentifier),
+           app.activate(options: [.activateIgnoringOtherApps]) { return }
+        if attempt < 10 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.activateAttachedEStop(attempt: attempt + 1)
+            }
+        }
+    }
+
+    private func showEStopUnavailable(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "BorgNet E-Stop unavailable"
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window)
+    }
+
+    @objc private func showEStop(_ sender: Any?) {
+        launchAttachedEStop(show: true)
+    }
 
     private func applyZoom(_ value: Double) {
         let zoom = min(3, max(0.5, value))
@@ -125,6 +214,7 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.userContentController.add(self, name: "borgnetBlur")
+        configuration.userContentController.addScriptMessageHandler(self, contentWorld: .page, name: "borgnetSession")
         configuration.userContentController.addUserScript(WKUserScript(
             source: nativeAppearanceScript(material: nativeMaterial),
             injectionTime: .atDocumentStart,
@@ -215,6 +305,10 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         synchronizeFocusFrost(animated: false)
+        launchAttachedEStop(show: false)
+        eStopWatchTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            self?.launchAttachedEStop(show: false)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -289,9 +383,18 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         publishNativeAppearance()
     }
 
-    private func loadAuthenticatedWorkspace() {
-        guard let url = workspaceURL else { return }
-        var launchURL = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage,
+                               replyHandler: @escaping (Any?, String?) -> Void) {
+        guard message.name == "borgnetSession", message.frameInfo.isMainFrame,
+              let url = message.frameInfo.request.url,
+              url.host == workspaceURL?.host, url.port == workspaceURL?.port, url.scheme == workspaceURL?.scheme else {
+            replyHandler(nil, "Untrusted workspace"); return
+        }
+        guard let token = workspaceSessionToken() else { replyHandler(nil, "Workspace server has not started"); return }
+        replyHandler(token, nil)
+    }
+
+    private func workspaceSessionToken() -> String? {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let configuredData = ProcessInfo.processInfo.environment["BORGNET_DATA_DIR"]
         let roots = configuredData.map { [URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)] }
@@ -300,10 +403,16 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             if let data = try? Data(contentsOf: root.appendingPathComponent("browser-session.json")),
                let object = try? JSONSerialization.jsonObject(with: data) as? [String: String],
                let token = object["token"] {
-                launchURL.fragment = "session=" + token
-                break
+                return token
             }
         }
+        return nil
+    }
+
+    private func loadAuthenticatedWorkspace() {
+        guard let url = workspaceURL else { return }
+        var launchURL = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        if let token = workspaceSessionToken() { launchURL.fragment = "session=" + token }
         // A changed fragment alone is a same-document navigation in WKWebView.
         launchURL.queryItems = (launchURL.queryItems ?? []).filter { $0.name != "reload" }
             + [URLQueryItem(name: "reload", value: UUID().uuidString)]
@@ -374,6 +483,15 @@ final class BorgNetAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         viewMenu.addItem(equalZoom)
         viewItem.submenu = viewMenu
         mainMenu.addItem(viewItem)
+        let safetyItem = NSMenuItem()
+        let safetyMenu = NSMenu(title: "Safety")
+        let showStop = NSMenuItem(title: "E-Stop: Installation Required…", action: #selector(showEStop(_:)), keyEquivalent: "e")
+        showStop.keyEquivalentModifierMask = [.command, .shift]
+        showStop.target = self
+        safetyMenu.addItem(showStop)
+        eStopMenuItem = showStop
+        safetyItem.submenu = safetyMenu
+        mainMenu.addItem(safetyItem)
         NSApp.mainMenu = mainMenu
     }
 }

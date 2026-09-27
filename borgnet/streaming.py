@@ -1,10 +1,39 @@
-"""Bounded public-text streaming; reasoning and tool events are never forwarded."""
+"""Bounded public-text streaming with a separate local reasoning display channel."""
 import codecs
 import json
+import re
 from contextvars import ContextVar
+from urllib.parse import urlsplit
 
 listener = ContextVar('borgnet_stream_listener', default=None)
+reasoning_listener = ContextVar('borgnet_reasoning_listener', default=None)
 MAX_BYTES = 8_000_000
+MAX_REASONING_CHARS = 48_000
+
+
+def reasoning_eligible(item):
+    """A loopback OpenAI API can be a cloud proxy, so require explicit trust."""
+    loopback = {'localhost', '127.0.0.1', '::1'}
+    if item.kind not in {'ollama', 'openai'}:
+        return False
+    if item.ssh:
+        return item.ssh.remote_host in loopback
+    if urlsplit(item.url).hostname not in loopback:
+        return False
+    return item.kind == 'ollama' or item.options.get('show_local_reasoning') is True
+
+
+def context_error(raw):
+    """Recognize only numeric context diagnostics; never echo arbitrary provider data."""
+    try:
+        detail = json.loads(raw).get('detail', '')
+    except (ValueError, AttributeError):
+        return None
+    if isinstance(detail, str) and re.fullmatch(
+            r'Context exceeds \d{1,9} tokens: prompt=\d{1,9}, reserved output=\d{1,9}\. '
+            r'Reduce context/history or max_tokens; nothing was truncated\.', detail):
+        return detail
+    return None
 
 
 def public_delta(kind, event):
@@ -30,26 +59,70 @@ def public_delta(kind, event):
     return ''
 
 
-async def stream_request(client, kind, method, url, payload, headers, emit):
+def reasoning_delta(kind, event):
+    """Only explicit local-model reasoning fields, never content or tool arguments."""
+    if kind == 'ollama':
+        value = (event.get('message') or {}).get('thinking', '')
+    elif kind == 'openai':
+        choices = event.get('choices') or []
+        delta = (choices[0].get('delta') or {}) if choices else {}
+        value = delta.get('reasoning_content', delta.get('reasoning', ''))
+    else:
+        return ''
+    return value if isinstance(value, str) else ''
+
+
+def complete_reasoning(kind, data):
+    if not isinstance(data, dict):
+        return ''
+    if kind == 'ollama':
+        message = data.get('message') or {}
+    elif kind == 'openai':
+        choices = data.get('choices') or []
+        message = (choices[0].get('message') or {}) if choices else {}
+    else:
+        return ''
+    if not isinstance(message, dict):
+        return ''
+    value = message.get('thinking', '') if kind == 'ollama' else message.get('reasoning_content', message.get('reasoning', ''))
+    return value if isinstance(value, str) else ''
+
+
+async def stream_request(client, kind, method, url, payload, headers, emit, emit_reasoning=None):
     payload = dict(payload)
     if kind == 'gemini':
         url = url.replace(':generateContent', ':streamGenerateContent') + '?alt=sse'
     else:
         payload['stream'] = True
-    text, size, pending = [], 0, ''
+    text, size, pending, reasoning_size = [], 0, '', 0
     decoder = codecs.getincrementaldecoder('utf-8')()
     completed = False
     async with client.stream(method, url, json=payload, headers=headers) as response:
         if not response.is_success:
+            raw = bytearray()
+            async for chunk in response.aiter_bytes():
+                raw.extend(chunk[:4097-len(raw)])
+                if len(raw) > 4096:
+                    break
+            detail = context_error(raw) if len(raw) <= 4096 else None
+            if detail:
+                raise ValueError(detail)
             raise ValueError(f'Provider streaming request failed (HTTP {response.status_code}); check endpoint support, model access and quota')
         if response.headers.get('content-type', '').split(';')[0] == 'application/json':
             raw = bytearray()
             async for chunk in response.aiter_bytes():
                 raw.extend(chunk)
                 if len(raw) > MAX_BYTES: raise ValueError('Provider response exceeds the 8 MB limit')
-            return json.loads(raw)
+            data = json.loads(raw)
+            if emit_reasoning:
+                reason = complete_reasoning(kind, data)
+                if reason:
+                    await emit_reasoning(reason[:MAX_REASONING_CHARS])
+                    if len(reason) > MAX_REASONING_CHARS:
+                        await emit_reasoning('\n[Model reasoning display truncated.]')
+            return data
         async def consume(line):
-            nonlocal completed
+            nonlocal completed, reasoning_size
             line = line.strip()
             if not line or line.startswith(('event:', ':', 'id:', 'retry:')):
                 return
@@ -72,6 +145,16 @@ async def stream_request(client, kind, method, url, payload, headers, emit):
             if delta:
                 text.append(delta)
                 await emit(delta)
+            if emit_reasoning and reasoning_size < MAX_REASONING_CHARS:
+                reasoning = reasoning_delta(kind, event)
+                if reasoning:
+                    remaining = MAX_REASONING_CHARS - reasoning_size
+                    shown = reasoning[:remaining]
+                    reasoning_size += len(shown)
+                    if shown:
+                        await emit_reasoning(shown)
+                    if len(reasoning) > remaining:
+                        await emit_reasoning('\n[Model reasoning display truncated.]')
             if event.get('done') or event.get('type') in {'message_stop','message-end','response.completed'}:
                 completed = True
             if kind == 'gemini' and any(c.get('finishReason') for c in event.get('candidates', [])):

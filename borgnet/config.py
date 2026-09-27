@@ -41,6 +41,8 @@ class Connection(BaseModel):
     cli_agent: str = Field(default="", max_length=100, pattern=r"^[a-zA-Z0-9_-]*$")
     url: str
     purpose: str = Field(default="", max_length=4000)
+    capabilities: str = Field(default="", max_length=2000)
+    context_window: int | None = Field(default=None, ge=256, le=2000000)
     model: str = Field(default="", max_length=300)
     enabled: bool = True
     key_env: str = Field(default="", max_length=128, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$|^$")

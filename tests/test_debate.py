@@ -39,6 +39,38 @@ async def test_revision_specific_unanimity_and_context(tmp_path):
     assert all(c[2]['reference_data']=='Shared acceptance criteria' for c in peers.calls)
     assert any(e['type']=='delta' for e in events)
     assert record['results'][-1]['status']=='complete'
+    for identity, system, data, _ in peers.calls:
+        assert f'Your participant ID is {identity}.' in system
+        assert len(data['participants']) == 3
+        if 'Challenge the CURRENT' in system:
+            assert data['candidate_author']['participant'] in {'c0', 'c1'}
+
+
+async def test_compact_review_preserves_candidate_and_required_evidence(tmp_path):
+    peers = Peers(tmp_path)
+    original = peers.stream_chat
+    captured = []
+    async def capture(item, messages, system, on_delta):
+        import json
+        data = json.loads(messages[0]['content'])
+        captured.append((system, data))
+        if 'Independently assess' in system:
+            return 'Evidence is insufficient.\nDISAGREE R1'
+        return await original(item, messages, system, on_delta)
+    peers.stream_chat = capture
+    items = members()
+    items[1].options['debate_compact'] = True
+    record = {'results': []}
+    prior = [{'prompt': 'Earlier request', 'results': [{'phase': 'final', 'text': 'Earlier answer'}]}]
+    _ = [e async for e in debate(peers, items, 'Exact request', 'Exact reference', prior, 'c0', record, rounds=1)]
+    data = next(d for s, d in captured if 'Independently assess' in s)
+    assert data['candidate'] == record['debate_rounds'][0]['candidate']
+    assert data['operator_request'] == 'Exact request'
+    assert data['reference_data'] == 'Exact reference'
+    assert data['conversation_context'][0]['answer'] == 'Earlier answer'
+    assert 'previous_critiques' not in data and 'recent_turns' not in data
+    assert 'omitted' in data['review_scope']
+    assert not record['consensus']
 
 @pytest.mark.parametrize('failure', [False,True])
 async def test_dissent_and_failure_never_trigger_execution(tmp_path,failure):

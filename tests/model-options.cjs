@@ -16,3 +16,7 @@ const saved=context.modelProfiles(cpu);assert.equal(saved['thinking-model'].num_
 assert.equal(saved.alternate.num_ctx,4096);
 assert.equal(context.modelOptions({...cpu,model:'alternate',model_options:saved},'thinking-model').num_gpu,0);
 console.log('Per-model GPU and generation settings survive switching away and back.');
+const localOpenAI={kind:'openai',model:'qwen-a',options:{show_local_reasoning:true},model_options:{'qwen-b':{max_tokens:512}}};
+assert.equal(context.modelOptions(localOpenAI,'qwen-b').show_local_reasoning,true);
+assert.equal(context.modelOptions({...localOpenAI,options:{}},'qwen-b').show_local_reasoning,undefined);
+console.log('Trusted local reasoning stays tied to the connection when models change.');

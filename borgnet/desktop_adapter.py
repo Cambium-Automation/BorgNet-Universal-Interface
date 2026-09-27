@@ -21,13 +21,29 @@ def status():
             recording = bool(Quartz.CGPreflightScreenCaptureAccess())
             return {'supported': True, 'ready': accessibility and recording,
                     'accessibility': accessibility, 'screen_recording': recording,
-                    'message': 'macOS: grant Accessibility and Screen Recording to the launching terminal/Python app in System Settings, then restart it.'}
+                    'message': 'macOS: grant Accessibility and Screen Recording to the BorgNet service process in System Settings, then restart BorgNet.'}
         except (ImportError, OSError):
             return {'supported': False, 'ready': False, 'message': 'Install the bundled Quartz dependencies.'}
     if sys.platform == 'linux':
         ready = bool(os.environ.get('DISPLAY')) and not bool(os.environ.get('WAYLAND_DISPLAY'))
         return {'supported': ready, 'ready': ready, 'message': 'Desktop control requires an X11 session; Wayland is not supported.'}
     return {'supported': False, 'ready': False, 'message': 'Desktop control supports macOS and Linux X11.'}
+
+
+def request_access():
+    """Ask macOS to show its normal consent UI for this process; never change TCC directly."""
+    if sys.platform != 'darwin':
+        raise ValueError('macOS Accessibility and Screen Recording requests are available on macOS only')
+    import objc
+    import Foundation
+    import Quartz
+    service = ctypes.CDLL('/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices')
+    service.AXIsProcessTrustedWithOptions.argtypes = [ctypes.c_void_p]
+    service.AXIsProcessTrustedWithOptions.restype = ctypes.c_bool
+    options = Foundation.NSDictionary.dictionaryWithObject_forKey_(True, 'AXTrustedCheckOptionPrompt')
+    service.AXIsProcessTrustedWithOptions(objc.pyobjc_id(options))
+    Quartz.CGRequestScreenCaptureAccess()
+    return status()
 
 
 class Desktop:
