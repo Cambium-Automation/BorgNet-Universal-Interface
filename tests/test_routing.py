@@ -109,6 +109,40 @@ def test_dispatch_routes_only_one_and_preserves_context(tmp_path):
         assert client.post('/api/routing',headers={'X-BorgNet-Token':token},json={'backend':'connection','selector':'a'}).status_code==200
 
 
+def test_native_jev_routes_before_any_answer_model_is_contacted(tmp_path):
+    store = Store(tmp_path)
+    candidates = [Connection(id=name, kind='openai', url=f'https://{name}.example/v1', model=name)
+                  for name in ('a', 'b', 'c')]
+    store.write('config', {'connections': [c.model_dump() for c in candidates], 'mcp_sources': [],
+                           'routing': {'backend': 'jev', 'model': 'jev-latest'}})
+    store.save_secret('__jev_router__', 'fixture-secret')
+    calls = []
+    def respond(request):
+        calls.append((request.url.host, json.loads(request.content)))
+        if request.url.host == 'api.typesafe.ai':
+            assert len(calls) == 1
+            assert calls[0][1]['state']['request'] == 'Private routing prompt'
+            return httpx.Response(200, json={'model': 'jev-fixture', 'answers': {'route': {
+                'type': 'choice', 'choice': 'b', 'confidence': .9,
+                'probabilities': {'a': .05, 'b': .9, 'c': .04, 'uncertain': .01}}}})
+        assert request.url.host == 'b.example'
+        assert calls[1][1]['messages'][-1]['content'] == 'Private routing prompt'
+        return httpx.Response(200, headers={'content-type': 'text/event-stream'},
+            content=b'data: {"choices":[{"delta":{"content":"Routed answer"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+    with TestClient(create_app(tmp_path, httpx.MockTransport(respond))) as client:
+        token = client.get('/api/state').json()['token']
+        response = client.post('/api/dispatch', headers={'X-BorgNet-Token': token},
+            json={'prompt': 'Private routing prompt', 'connections': ['a', 'b', 'c'],
+                  'auto_select': True})
+        assert response.status_code == 200, response.text
+        events = [json.loads(line) for line in response.text.splitlines()]
+        assert [event['type'] for event in events if event['type'] in {'routing', 'started', 'result'}] == [
+            'routing', 'started', 'result']
+        assert [event['connection'] for event in events if event['type'] == 'started'] == ['b']
+        assert len(calls) == 2
+        assert [host for host, _ in calls] == ['api.typesafe.ai', 'b.example']
+
+
 @pytest.mark.asyncio
 async def test_forced_tool_call(tmp_path):
     store,candidates=setup(tmp_path)

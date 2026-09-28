@@ -1,7 +1,7 @@
 # Prompt-based model selection
 
 Choose **Model selector** in the composer to configure a selector, then choose
-**Auto select · best fit** under Response mode. Each request selects one of the
+**Jev routes · one model** under Response mode when Jev is configured. Each request selects one of the
 enabled connections with a configured model. Discovered but unselected model IDs
 are not candidates. Set each connection's purpose, capability notes, and usable
 runtime context window in Edit connection. Capability notes should state verified
@@ -46,6 +46,8 @@ A single candidate skips selector inference.
 Selection and its reason appear in the response group and saved conversation
 history. Invalid output, an uncertain choice, timeout, or an unavailable selector
 stops the request with an error. No silent model substitution or automatic retry
-occurs. Independent answers and collaborative review/debate remain separate modes.
+occurs. The interface shows a routing state while the selector runs, then only
+the chosen answer model. Other answer models are not contacted. Independent
+answers and collaborative review/debate remain separate modes.
 
 Protocol reference: https://docs.typesafe.ai/api
