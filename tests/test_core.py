@@ -110,6 +110,32 @@ def test_parallel_dispatch_and_history(client):
     assert history[0]['conversation']==events[0]['conversation']
 
 
+def test_quick_response_preserves_normal_connection_options(tmp_path):
+    store=Store(tmp_path)
+    item=Connection(id='bonsai',kind='openai',url='http://localhost:8110/v1',model='fixture-chat',
+                    options={'reasoning_effort':'medium','max_tokens':4096,
+                             'quick_response':{'reasoning_effort':'low','thinking_budget_tokens':128}})
+    config=store.config();config['connections']=[item.model_dump()];store.write('config',config)
+    seen=[]
+    def upstream(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200,json={'choices':[{'message':{'content':'OK'}}]})
+    with TestClient(create_app(tmp_path,httpx.MockTransport(upstream))) as browser:
+        browser.headers['X-BorgNet-Token']=browser.get('/api/state').json()['token']
+        assert browser.post('/api/settings',json={'synthesis':'__single_quick__'}).status_code==200
+        assert browser.get('/api/state').json()['synthesis']=='__single_quick__'
+        body={'prompt':'Reply OK','connections':['bonsai'],'collaborate':False}
+        assert browser.post('/api/dispatch',json=body).status_code==200
+        quick=browser.post('/api/dispatch',json={**body,'quick_response':True})
+        assert quick.status_code==200,quick.text
+        assert browser.post('/api/dispatch',json={**body,'quick_response':True,'collaborate':True}).status_code==400
+        assert seen[0]['reasoning_effort']=='medium' and 'thinking_budget_tokens' not in seen[0]
+        assert seen[1]['reasoning_effort']=='low' and seen[1]['thinking_budget_tokens']==128
+        assert seen[0]['max_tokens']==seen[1]['max_tokens']==4096
+        assert store.read('history',[])[-1]['quick_response'] is True
+        assert store.config()['connections'][0]['options']['reasoning_effort']=='medium'
+
+
 def test_discovery_pull_and_disabled_guard(client):
     identity=add(client)
     assert client.post(f'/api/connections/{identity}/discover',json={}).json()['models']==['fixture-chat']

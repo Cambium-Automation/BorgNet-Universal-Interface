@@ -65,6 +65,7 @@ class Dispatch(BaseModel):
     debate_rounds: int = Field(default=3, ge=1, le=6)
     implement: bool = False
     executor: str = ""
+    quick_response: bool = False
 
 
 def create_app(root: Path, provider_transport=None):
@@ -333,7 +334,7 @@ def create_app(root: Path, provider_transport=None):
             if "theme" in data:
                 config["theme"] = data["theme"]
             if "synthesis" in data:
-                if data["synthesis"] and data["synthesis"] not in {"__independent__", "__route__", "__single__"} and data["synthesis"] not in {c["id"] for c in config["connections"]}:
+                if data["synthesis"] and data["synthesis"] not in {"__independent__", "__route__", "__single__", "__single_quick__"} and data["synthesis"] not in {c["id"] for c in config["connections"]}:
                     raise ValueError("Select a configured synthesis connection")
                 config["synthesis"] = data["synthesis"]
             store.write("config", config)
@@ -370,6 +371,19 @@ def create_app(root: Path, provider_transport=None):
         selected = [find(identity) for identity in dict.fromkeys(data.connections)]
         if any(not c.enabled or not c.model for c in selected):
             raise ValueError("Enable each selected connection and choose its model")
+        if data.quick_response:
+            if len(selected) != 1 or data.auto_select or data.collaborate or data.synthesize:
+                raise ValueError("Quick response requires direct chat with one model")
+            quick = selected[0].options.get('quick_response')
+            if (selected[0].kind != 'openai' or not isinstance(quick, dict) or
+                    set(quick) != {'reasoning_effort', 'thinking_budget_tokens'} or
+                    not isinstance(quick['reasoning_effort'], str) or
+                    quick['reasoning_effort'] not in {'minimal', 'low', 'medium'} or
+                    type(quick['thinking_budget_tokens']) is not int or
+                    not 0 <= quick['thinking_budget_tokens'] <= 2048):
+                raise ValueError("This connection has no valid quick response profile")
+            selected[0] = selected[0].model_copy(update={
+                'options': {**selected[0].options, **quick}})
         if any(c.id in active for c in selected):
             raise ValueError("A selected connection is already busy")
         if data.synthesize and data.synthesize not in {c.id for c in selected}:
@@ -422,6 +436,8 @@ def create_app(root: Path, provider_transport=None):
             queue = asyncio.Queue(maxsize=256)
             record = {"id": uuid.uuid4().hex, "conversation": conversation, "created_at": time.time(),
                       "prompt": data.prompt, "results": [], "context_titles": [c["title"] for c in contexts]}
+            if data.quick_response:
+                record['quick_response'] = True
             if routing:
                 record['routing'] = routing
             async def run(item):

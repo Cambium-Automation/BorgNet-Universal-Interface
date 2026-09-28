@@ -67,7 +67,9 @@ def test_dispatch_reports_tool_activity_before_final_result(tmp_path):
     from borgnet.server import create_app
     from tests.client import TestClient
     store = Store(tmp_path)
-    item = Connection(id='local', kind='openai', url='http://127.0.0.1:8110/v1', model='fixture')
+    item = Connection(id='local', kind='openai', url='http://127.0.0.1:8110/v1', model='fixture',
+                      options={'reasoning_effort':'medium',
+                               'quick_response':{'reasoning_effort':'low','thinking_budget_tokens':128}})
     cfg = store.config()
     cfg['connections'] = [item.model_dump()]
     cfg['permissions'] = Permissions(overrides={'local': Policy(workspace=str(tmp_path), full_access=True)}).model_dump()
@@ -76,6 +78,9 @@ def test_dispatch_reports_tool_activity_before_final_result(tmp_path):
     def respond(request):
         nonlocal calls
         calls += 1
+        body=json.loads(request.content)
+        assert body['reasoning_effort']=='low' and body['thinking_budget_tokens']==128
+        assert any(tool['function']['name']=='run_command' for tool in body['tools'])
         if calls == 1:
             return httpx.Response(200, json={'choices': [{'message': {'role':'assistant','content':'',
                 'tool_calls':[{'id':'one','type':'function','function':{'name':'run_command',
@@ -84,7 +89,8 @@ def test_dispatch_reports_tool_activity_before_final_result(tmp_path):
         return httpx.Response(200, json={'choices':[{'message':{'role':'assistant','content':'Checked'}}]})
     with TestClient(create_app(tmp_path, httpx.MockTransport(respond))) as client:
         headers={'X-BorgNet-Token':client.get('/api/state').json()['token']}
-        response=client.post('/api/dispatch',json={'prompt':'Check the folder','connections':['local']},headers=headers)
+        response=client.post('/api/dispatch',json={'prompt':'Check the folder','connections':['local'],
+                                                  'collaborate':False,'quick_response':True},headers=headers)
         events=[json.loads(line) for line in response.text.splitlines()]
         assert [event['type'] for event in events if event['type'] in {'stream-reset','tool','result'}] == ['stream-reset','tool','result']
         assert next(event for event in events if event['type']=='stream-reset')['mode']=='buffered-tools'

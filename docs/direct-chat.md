@@ -7,6 +7,17 @@ messages in a conversation keep the selected model's previous answers as
 context. Switching models only sends that model's own prior answers; it does
 not silently hand another model's answer to it.
 
+An OpenAI-compatible connection can also offer **Quick chat with one model**.
+In its Provider options JSON, set `quick_response` to an object containing
+`reasoning_effort` (`minimal`, `low`, or `medium`) and
+`thinking_budget_tokens` (0–2048). For example,
+`"quick_response":{"reasoning_effort":"low","thinking_budget_tokens":128}`.
+The quick option appears only for enabled connections with that profile.
+It applies those two generation settings to this request; normal chat keeps
+the connection's usual settings. Tool grants, context, and conversation
+behavior are the same. A smaller thinking budget can shorten simple answers
+but may reduce quality on difficult tasks, and some endpoints may ignore it.
+
 Expand the response bar to inspect each model's live answer. Local Ollama and
 loopback or SSH OpenAI-compatible endpoints also show a **Model-emitted
 reasoning** panel when the endpoint sends an explicit reasoning stream. The
