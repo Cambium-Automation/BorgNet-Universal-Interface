@@ -25,6 +25,41 @@ class Tunnels:
                 "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
                 "-p", str(ssh.port), "-L", f"127.0.0.1:{port}:{ssh.remote_host}:{ssh.remote_port}"] + (["-i", str(Path(ssh.identity_file).expanduser()), "-o", "IdentitiesOnly=yes"] if ssh.identity_file else []) + [target]
 
+    @staticmethod
+    def socks_command(ssh, port):
+        target = f"{ssh.user}@{ssh.host}" if ssh.user else ssh.host
+        return ["ssh", "-N", "-T", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
+                "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10",
+                "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
+                "-p", str(ssh.port), "-D", f"127.0.0.1:{port}"] + (["-i", str(Path(ssh.identity_file).expanduser()), "-o", "IdentitiesOnly=yes"] if ssh.identity_file else []) + [target]
+
+    async def proxy(self, item):
+        if not item.proxy_ssh:
+            return None
+        async with self.lock:
+            existing = self.processes.get(item.id)
+            if existing and existing[0].returncode is None:
+                return existing[1]
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                port = sock.getsockname()[1]
+            process = await asyncio.create_subprocess_exec(*self.socks_command(item.proxy_ssh, port),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            proxy_url = f"socks5://127.0.0.1:{port}"
+            self.processes[item.id] = (process, proxy_url)
+            for _ in range(60):
+                if process.returncode is not None:
+                    break
+                try:
+                    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                    writer.close()
+                    await writer.wait_closed()
+                    return proxy_url
+                except OSError:
+                    await asyncio.sleep(.2)
+            await self.stop(item.id)
+            raise ValueError("SSH egress proxy failed. Verify SSH access and known_hosts with your SSH client first.")
+
     async def url(self, item):
         if not item.ssh:
             return item.url
@@ -86,6 +121,7 @@ class Providers:
 
     async def request(self, item, method, path, payload=None, timeout=None):
         base = await self.tunnels.url(item)
+        proxy = await self.tunnels.proxy(item)
         key = self.store.secret(item)
         if item.kind == "gemini" and urlsplit(base).hostname == "generativelanguage.googleapis.com" and not key:
             raise ValueError("Gemini API key is missing. Open Edit connection and add an AI Studio API key from a Free Tier project with billing disabled.")
@@ -99,7 +135,7 @@ class Providers:
                 headers["x-goog-api-key"] = key
         elif key:
             headers["Authorization"] = f"Bearer {key}"
-        async with httpx.AsyncClient(transport=self.transport, timeout=timeout or item.timeout, follow_redirects=False, trust_env=False) as client:
+        async with httpx.AsyncClient(transport=self.transport, proxy=proxy, timeout=timeout or item.timeout, follow_redirects=False, trust_env=False) as client:
             try:
                 if listener.get() is not None and method == 'POST' and path != '/api/pull':
                     return await stream_request(client, item.kind, method, base + path, payload, headers,

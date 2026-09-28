@@ -3,9 +3,9 @@ const source=fs.readFileSync('borgnet/web/app.js','utf8');
 const start=source.indexOf("$('#connectionForm').addEventListener('submit'");
 const end=source.indexOf("\n$('#connectionForm').elements.use_ssh",start);
 const helpers=[source.match(/^function loopbackHost.*$/m)[0],source.match(/^function loopbackEndpoint.*$/m)[0]].join('\n');
-async function check(old,values,expected,reasoning=false) {
+async function check(old,values,expected,reasoning=false,proxy=false) {
   let handler,body;
-  const form={elements:{use_ssh:{checked:false},show_local_reasoning:{checked:reasoning}},addEventListener:(_,fn)=>handler=fn};
+  const form={elements:{use_ssh:{checked:false},use_proxy_ssh:{checked:proxy},show_local_reasoning:{checked:reasoning}},addEventListener:(_,fn)=>handler=fn};
   vm.runInNewContext(helpers+'\n'+source.slice(start,end),{
     $:s=>s==='#connectionForm'?form:{close(){}},action:fn=>fn,
     state:{connections:old?[old]:[]},FormData:class {constructor(){return Object.entries(values);}},
@@ -25,5 +25,7 @@ async function check(old,values,expected,reasoning=false) {
   assert.equal(local.options.show_local_reasoning,true);
   const cloud=await check(null,{...values,kind:'openai',url:'https://api.example/v1'},'https://api.example/v1');
   assert.equal(cloud.options.show_local_reasoning,undefined);
+  const proxied=await check(null,{...values,kind:'openai',url:'https://api.example/v1',proxy_host:'egress.example.com',proxy_user:'',proxy_port:'22',proxy_identity_file:''},'https://api.example/v1',false,true);
+  assert.equal(proxied.proxy_ssh.host,'egress.example.com');
   console.log('CLI saves preserve existing inert endpoint metadata; new CLI and API edits retain correct URLs.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

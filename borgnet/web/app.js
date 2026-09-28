@@ -113,6 +113,7 @@ $('#connectionForm').elements.preset.addEventListener('change',event=>{
   form.elements.kind.value=p[1];form.elements.url.value=p[2];form.elements.key_env.value=p[3];
   form.elements.model.value='';form.elements.api_key.value='';form.elements.options.value='{}';
   form.elements.use_ssh.checked=false;$('#sshFields').hidden=true;
+  form.elements.use_proxy_ssh.checked=false;$('#proxyFields').hidden=true;
   form.elements.cli_provider.value=p[4]||'codex';form.elements.cli_agent.value='';
   if(p[1]==='cli')form.elements.model.value='default';
   if(p[2]==='https://openrouter.ai/api/v1'){form.elements.model.value='openrouter/free';form.elements.options.value=JSON.stringify({free_only:true});}
@@ -122,9 +123,12 @@ function updateConnectionFields() {
   const form=$('#connectionForm'),cli=form.elements.kind.value==='cli';
   $('#openrouterImportBox').hidden=cli||form.elements.kind.value!=='openai'||form.elements.url.value.replace(/\/$/,'')!=='https://openrouter.ai/api/v1';
   $('#cliFields').hidden=!cli;$('#apiFields').hidden=cli;$('#sshToggle').hidden=cli;
+  const proxyAllowed=!cli&&form.elements.url.value.startsWith('https://');
+  $('#proxyToggle').hidden=!proxyAllowed;
+  if(!proxyAllowed){form.elements.use_proxy_ssh.checked=false;$('#proxyFields').hidden=true;}
   $('#cliAgentField').hidden=!cli||form.elements.cli_provider.value!=='grok';
   form.elements.url.required=!cli;
-  if(cli){form.elements.use_ssh.checked=false;$('#sshFields').hidden=true;}
+  if(cli){form.elements.use_ssh.checked=false;$('#sshFields').hidden=true;form.elements.use_proxy_ssh.checked=false;$('#proxyFields').hidden=true;}
   $('#localReasoningOption').hidden=cli||form.elements.kind.value!=='openai'||form.elements.use_ssh.checked||!loopbackEndpoint(form.elements.url.value);
 }
 $('#connectionForm').elements.url.addEventListener('input',updateConnectionFields);
@@ -135,6 +139,9 @@ function editConnection(c) {
   form.elements.context_window.value=c?.context_window||'';
   form.elements.use_ssh.checked=Boolean(c?.ssh);form.elements.options.value=JSON.stringify(c?.options||{},null,2);form.elements.timeout.value=c?.timeout||180;
   for(const [name,field] of [['ssh_host','host'],['ssh_user','user'],['ssh_port','port'],['remote_port','remote_port'],['identity_file','identity_file'],['remote_host','remote_host']]) if(c?.ssh) form.elements[name].value=c.ssh[field];
+  form.elements.use_proxy_ssh.checked=Boolean(c?.proxy_ssh);
+  for(const [name,field] of [['proxy_host','host'],['proxy_user','user'],['proxy_port','port'],['proxy_identity_file','identity_file']]) if(c?.proxy_ssh) form.elements[name].value=c.proxy_ssh[field];
+  $('#proxyFields').hidden=!c?.proxy_ssh;
   $('#sshFields').hidden=!c?.ssh;$('#deleteConnection').hidden=!c;
   $('#keyHint').textContent=c?.has_key?'A key is configured. Leave blank to keep it. Entering a key switches from the environment variable to local key storage.':'Keys are stored separately with owner-only file permissions. Entering a key overrides the preset’s environment variable.';
   form.elements.cli_provider.value=c?.cli_provider||'codex';form.elements.cli_agent.value=c?.cli_agent||'';
@@ -149,10 +156,12 @@ $('#connectionForm').addEventListener('submit',action(async event=>{
   if(values.kind==='openai'&&!form.elements.use_ssh.checked&&loopbackEndpoint(values.url)&&form.elements.show_local_reasoning?.checked)options.show_local_reasoning=true;
   else delete options.show_local_reasoning;
   const body={cli_provider:values.cli_provider,cli_agent:cli&&values.cli_provider==='grok'?values.cli_agent:'',id:values.id,kind:values.kind,url:cli?(old?.url||'http://127.0.0.1'):values.url,purpose:values.purpose,capabilities:values.capabilities,context_window:values.context_window?Number(values.context_window):null,model:values.model,key_env:cli?'':values.key_env,enabled:old?.enabled??true,model_options:old?.model_options||{},api_key:values.api_key||null,
-    ssh:form.elements.use_ssh.checked?{host:values.ssh_host,user:values.ssh_user,port:Number(values.ssh_port),remote_port:Number(values.remote_port),identity_file:values.identity_file,remote_host:values.remote_host||'127.0.0.1'}:null,options,timeout:Number(values.timeout)};
+    ssh:form.elements.use_ssh.checked?{host:values.ssh_host,user:values.ssh_user,port:Number(values.ssh_port),remote_port:Number(values.remote_port),identity_file:values.identity_file,remote_host:values.remote_host||'127.0.0.1'}:null,
+    proxy_ssh:form.elements.use_proxy_ssh.checked?{host:values.proxy_host,user:values.proxy_user,port:Number(values.proxy_port),identity_file:values.proxy_identity_file}:null,options,timeout:Number(values.timeout)};
   const result=await api('/connections',body);$('#connectionDialog').close();await load();await discover(result.id);
 }));
-$('#connectionForm').elements.use_ssh.addEventListener('change',event=>{$('#sshFields').hidden=!event.target.checked;updateConnectionFields();});
+$('#connectionForm').elements.use_ssh.addEventListener('change',event=>{if(event.target.checked){$('#connectionForm').elements.use_proxy_ssh.checked=false;$('#proxyFields').hidden=true;}$('#sshFields').hidden=!event.target.checked;updateConnectionFields();});
+$('#connectionForm').elements.use_proxy_ssh.addEventListener('change',event=>{if(event.target.checked){$('#connectionForm').elements.use_ssh.checked=false;$('#sshFields').hidden=true;}$('#proxyFields').hidden=!event.target.checked;updateConnectionFields();});
 $('#connectionForm').elements.kind.addEventListener('change',event=>{const form=$('#connectionForm'); if(!form.elements.id.value){const defaults={ollama:'http://localhost:11434',openai:'https://api.openai.com/v1',anthropic:'https://api.anthropic.com/v1',gemini:'https://generativelanguage.googleapis.com/v1beta',responses:'https://api.openai.com/v1',cohere:'https://api.cohere.com',cli:'http://127.0.0.1'};form.elements.preset.value='';form.elements.key_env.value='';form.elements.api_key.value='';form.elements.options.value='{}';form.elements.url.value=defaults[event.target.value];if(event.target.value==='cli')form.elements.model.value='default';}updateConnectionFields();});
 $('#deleteConnection').addEventListener('click',action(async()=>{await api(`/connections/${$('#connectionForm').elements.id.value}/delete`,{});$('#connectionDialog').close();await load();}));
 $('#pullForm').addEventListener('submit',action(async event=>{event.preventDefault();const model=new FormData(event.currentTarget).get('model');$('#pullDialog').close();health.set(pullConnection,{text:'Downloading…'});renderConnections();toast('Download started. Large models may take several minutes.');const id=pullConnection;try{await api(`/connections/${id}/pull`,{model});toast('Model downloaded.');await discover(id);}catch(error){health.set(id,{text:error.message,error:true});renderConnections();throw error;}}));

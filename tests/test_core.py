@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import sys
 from pathlib import Path
 import httpx
@@ -8,10 +7,10 @@ import pytest
 from starlette.requests import ClientDisconnect
 from tests.client import TestClient
 from pydantic import ValidationError
-from borgnet.config import Store, Connection, SSH, MCPSource
+from borgnet.config import Store, Connection, SSH, SSHHost, MCPSource
 from borgnet.providers import Providers, Tunnels
 from borgnet.server import Dispatch, create_app
-from borgnet.mcp_bridge import inspect_source, fetch_context, shared_server
+from borgnet.mcp_bridge import inspect_source, fetch_context
 
 
 def fixture_response(request):
@@ -301,6 +300,20 @@ def test_ssh_identity_and_remote_bind_address():
     assert 'IdentitiesOnly=yes' in args
     with pytest.raises(ValidationError):
         SSH(host='compute.example.com',remote_host='host:9000:other')
+
+
+def test_ssh_egress_proxy_requires_https_and_cannot_mix_tunnels():
+    proxy=SSHHost(host='egress.example.com',identity_file='~/.ssh/example_key')
+    item=Connection(kind='openai',url='https://api.groq.com/openai/v1',model='qwen/qwen3.8-27b',proxy_ssh=proxy)
+    assert item.address.endswith('via egress.example.com:22')
+    args=Tunnels.socks_command(proxy,23456)
+    assert args[args.index('-D')+1]=='127.0.0.1:23456'
+    assert 'StrictHostKeyChecking=yes' in args and 'BatchMode=yes' in args
+    assert str(Path('~/.ssh/example_key').expanduser()) in args
+    with pytest.raises(ValidationError):
+        Connection(kind='openai',url='http://127.0.0.1:1234/v1',proxy_ssh=proxy)
+    with pytest.raises(ValidationError):
+        Connection(kind='openai',url='https://api.groq.com/openai/v1',ssh=SSH(host='compute.example.com'),proxy_ssh=proxy)
 
 
 async def test_runtime_options_cannot_override_protocol_fields(tmp_path):

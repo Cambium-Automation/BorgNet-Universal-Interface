@@ -20,18 +20,21 @@ def endpoint(value: str) -> str:
     return value.rstrip("/")
 
 
-class SSH(BaseModel):
+class SSHHost(BaseModel):
     host: str = Field(min_length=1, max_length=253, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
     user: str = Field(default="", max_length=64, pattern=r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$|^$")
     port: int = Field(default=22, ge=1, le=65535)
-    remote_port: int = Field(default=11434, ge=1, le=65535)
-
-    remote_host: str = Field(default="127.0.0.1", max_length=253, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
     identity_file: str = Field(default="", max_length=1000)
 
     @property
     def address(self):
         return f"{self.user + '@' if self.user else ''}{self.host}:{self.port}"
+
+
+class SSH(SSHHost):
+    remote_port: int = Field(default=11434, ge=1, le=65535)
+
+    remote_host: str = Field(default="127.0.0.1", max_length=253, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 
 
 class Connection(BaseModel):
@@ -47,6 +50,7 @@ class Connection(BaseModel):
     enabled: bool = True
     key_env: str = Field(default="", max_length=128, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$|^$")
     ssh: SSH | None = None
+    proxy_ssh: SSHHost | None = None
     options: dict = Field(default_factory=dict)
     model_options: dict[str, dict] = Field(default_factory=dict)
     timeout: int = Field(default=180, ge=10, le=1800)
@@ -54,8 +58,12 @@ class Connection(BaseModel):
 
     @model_validator(mode="after")
     def check_cli(self):
-        if self.kind == "cli" and (self.ssh or self.key_env):
+        if self.kind == "cli" and (self.ssh or self.proxy_ssh or self.key_env):
             raise ValueError("CLI connections use this computer's installed CLI and its existing sign-in")
+        if self.proxy_ssh and self.ssh:
+            raise ValueError("Choose either an endpoint SSH tunnel or an SSH egress proxy")
+        if self.proxy_ssh and urlsplit(self.url).scheme != 'https':
+            raise ValueError("SSH egress proxy requires an HTTPS API endpoint")
         if self.cli_agent and (self.kind != "cli" or self.cli_provider != "grok"):
             raise ValueError("A named CLI agent is supported only for Grok")
         return self
@@ -65,7 +73,7 @@ class Connection(BaseModel):
         if self.kind == "cli":
             from .cli_text import NAMES
             return f"{NAMES[self.cli_provider]} CLI" + (f" · {self.cli_agent}" if self.cli_agent else " · this computer")
-        return self.ssh.address if self.ssh else self.url
+        return self.ssh.address if self.ssh else f"{self.url} via {self.proxy_ssh.address}" if self.proxy_ssh else self.url
 
 
 class MCPSource(BaseModel):

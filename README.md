@@ -55,6 +55,8 @@ Cards and results show **SSH address + actual model ID**, or **API base URL + ac
 
 SSH uses agent/key authentication (or the explicitly configured identity file), `BatchMode=yes`, `StrictHostKeyChecking=yes`, and no shell interpolation. First establish trusted access with your SSH client. BorgNet does not accept passwords, enroll host keys, install a remote runtime, execute model-generated commands, or weaken SSH configuration. Remote unencrypted HTTP endpoints must be reached through SSH; direct remote APIs require HTTPS.
 
+For a cloud API blocked on the Mac's network path, **Route HTTPS API through an SSH egress proxy** can use a trusted SSH computer's Internet connection for that connection alone. This opens a local SOCKS5 tunnel with dynamic DNS resolution at the SSH computer. The API URL must remain HTTPS, so the SSH computer forwards encrypted traffic without receiving the API key or message contents. The tunnel closes when BorgNet stops, including through E-stop. Check the cloud provider's access terms and the SSH computer's network policy before enabling it.
+
 ### API keys
 
 Use a key in the connection form, or enter the name of an environment variable available to the BorgNet process. Environment variables take precedence. Saved secrets are separate from configuration, written with owner-only file permissions, and never returned by the API. They are **not encrypted at rest**; use environment variables if that is preferable. Leave the key field blank when editing to keep the saved key. Remove a connection to delete its saved key.
