@@ -1,14 +1,16 @@
+import asyncio
 import json
 import os
 import sys
 from pathlib import Path
 import httpx
 import pytest
+from starlette.requests import ClientDisconnect
 from tests.client import TestClient
 from pydantic import ValidationError
 from borgnet.config import Store, Connection, SSH, MCPSource
 from borgnet.providers import Providers, Tunnels
-from borgnet.server import create_app
+from borgnet.server import Dispatch, create_app
 from borgnet.mcp_bridge import inspect_source, fetch_context, shared_server
 
 
@@ -216,6 +218,53 @@ def test_context_and_followup_reach_only_selected_provider(tmp_path):
         assert calls[1]['messages'][0]['role']=='system'
         assert calls[1]['messages'][0]['content'].startswith('Fixture purpose\n\nBORGNET CONNECTION FACTS')
         assert any(m['role']=='assistant' and m['content']=='Fixture answer' for m in calls[1]['messages'])
+
+
+async def test_disconnect_releases_streamed_connection(tmp_path):
+    app = create_app(tmp_path)
+    store = app.state.store
+    config = store.config()
+    config['connections'] = [Connection(id='fixture', kind='openai', url='http://localhost:1234/v1',
+                                        model='fixture-chat', enabled=True).model_dump()]
+    store.write('config', config)
+    dispatch = next(route.endpoint for route in app.routes if getattr(route, 'path', '') == '/api/dispatch')
+    data = Dispatch(prompt='Fixture question', connections=['fixture'], collaborate=False)
+
+    async def slow(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    app.state.providers.stream_chat = slow
+    first = await dispatch(data)
+    scope = {'type': 'http', 'asgi': {'version': '3.0', 'spec_version': '2.4'}}
+
+    async def receive():
+        await asyncio.Event().wait()
+
+    async def disconnect(message):
+        if message['type'] == 'http.response.body':
+            raise OSError('client closed the stream')
+
+    with pytest.raises(ClientDisconnect):
+        await first(scope, receive, disconnect)
+
+    second = await dispatch(data)
+    async def receive_disconnect():
+        await asyncio.sleep(0)
+        return {'type': 'http.disconnect'}
+    await second(scope, receive_disconnect, lambda message: asyncio.sleep(0))
+
+    async def quick(*args, **kwargs):
+        return 'Fixture answer'
+
+    app.state.providers.stream_chat = quick
+    third = await dispatch(data)
+    sent = []
+
+    async def collect(message):
+        sent.append(message)
+
+    await third(scope, receive, collect)
+    assert any(b'Fixture answer' in message.get('body', b'') for message in sent)
 
 
 def test_ssh_identity_and_remote_bind_address():

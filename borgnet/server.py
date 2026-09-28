@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.requests import ClientDisconnect
 from pydantic import BaseModel, Field, ValidationError
 from .config import Connection, MCPSource, Store, MAX_CONNECTIONS
 from .providers import Providers, Tunnels
@@ -18,6 +19,38 @@ from .debate import debate
 from typing import Literal
 
 WEB = Path(__file__).parent / "web"
+
+
+class ClosingStreamingResponse(StreamingResponse):
+    """Release a dispatch even when its client disconnects between slow tokens."""
+
+    def __init__(self, content, on_close, **kwargs):
+        super().__init__(content, **kwargs)
+        self.on_close = on_close
+
+    async def __call__(self, scope, receive, send):
+        stream = asyncio.create_task(self.stream_response(send))
+        disconnect = asyncio.create_task(self.listen_for_disconnect(receive))
+        try:
+            done, _ = await asyncio.wait({stream, disconnect}, return_when=asyncio.FIRST_COMPLETED)
+            if stream in done:
+                try:
+                    await stream
+                except OSError as error:
+                    raise ClientDisconnect() from error
+            if self.background is not None:
+                await self.background()
+        finally:
+            stream.cancel()
+            disconnect.cancel()
+            try:
+                await asyncio.gather(stream, disconnect, return_exceptions=True)
+            finally:
+                self.on_close()
+                try:
+                    await asyncio.wait_for(self.body_iterator.aclose(), timeout=5)
+                except (RuntimeError, TimeoutError):
+                    pass
 
 
 class Dispatch(BaseModel):
@@ -377,6 +410,14 @@ def create_app(root: Path, provider_transport=None):
             active.difference_update(reserved - {chosen.id})
         active.update(c.id for c in selected)
 
+        running_tasks = []
+
+        def release():
+            for task in running_tasks:
+                if not task.done():
+                    task.cancel()
+            active.difference_update(c.id for c in selected)
+
         async def events():
             queue = asyncio.Queue(maxsize=256)
             record = {"id": uuid.uuid4().hex, "conversation": conversation, "created_at": time.time(),
@@ -433,6 +474,7 @@ def create_app(root: Path, provider_transport=None):
                     store.append("history", record)
                 return
             tasks = [asyncio.create_task(run(c)) for c in selected]
+            running_tasks.extend(tasks)
             try:
                 if routing:
                     yield json.dumps({"type": "routing", **routing}) + "\n"
@@ -467,7 +509,7 @@ def create_app(root: Path, provider_transport=None):
                 await asyncio.gather(*tasks, return_exceptions=True)
                 active.difference_update(c.id for c in selected)
                 store.append("history", record)
-        return StreamingResponse(events(), media_type="application/x-ndjson")
+        return ClosingStreamingResponse(events(), on_close=release, media_type="application/x-ndjson")
 
     app.mount("/assets", StaticFiles(directory=WEB), name="assets")
     return app
