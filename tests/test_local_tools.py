@@ -36,6 +36,36 @@ async def test_local_model_function_call_executes_and_returns_observation(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_tool_loop_continues_past_old_step_and_batch_caps(tmp_path):
+    item = Connection(id='local', kind='openai', url='http://127.0.0.1:8110/v1', model='fixture')
+    class FakeProvider:
+        store = Store(tmp_path)
+        def __init__(self): self.rounds = 0
+        async def request(self, item, method, path, payload):
+            self.rounds += 1
+            if self.rounds == 2:
+                assert [message['tool_call_id'] for message in payload['messages'][-5:]] == [
+                    f'call-{number}' for number in range(5)]
+            if self.rounds == 11:
+                assert payload['messages'][-1]['tool_call_id'] == 'call-13'
+                return {'choices': [{'message': {'role': 'assistant', 'content': 'Finished'}}]}
+            count = 5 if self.rounds == 1 else 1
+            start = 0 if self.rounds == 1 else self.rounds + 3
+            calls = [{'id': f'call-{number}', 'type': 'function', 'function': {
+                'name': 'run_command', 'arguments': json.dumps({'argv': ['/bin/pwd']})}}
+                for number in range(start, start + count)]
+            return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': calls}}]}
+    provider = FakeProvider()
+    used = []
+    async def on_tool(name, ok): used.append((name, ok))
+    answer = await chat_with_tools(provider, item, [{'role': 'user', 'content': 'Inspect the workspace'}], '',
+                                   Policy(workspace=str(tmp_path), full_access=True), None, on_tool)
+    assert answer == 'Finished'
+    assert provider.rounds == 11
+    assert used == [('run_command', True)] * 14
+
+
+@pytest.mark.asyncio
 async def test_local_tools_hide_ungranted_browser_and_mac(tmp_path):
     tools = LocalTools(Policy(workspace=str(tmp_path), full_access=True), Store(tmp_path))
     try:

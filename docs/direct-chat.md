@@ -18,6 +18,12 @@ the connection's usual settings. Tool grants, context, and conversation
 behavior are the same. A smaller thinking budget can shorten simple answers
 but may reduce quality on difficult tasks, and some endpoints may ignore it.
 
+For local OpenAI-compatible and Ollama connections with host tools granted,
+BorgNet continues function calls until the model returns an answer or the
+request is stopped or fails. There is no fixed eight-step or four-tools-per-step
+cap. Use **Stop** in the composer to interrupt a request; the separate E-stop
+app is available to sever Mac SSH connections and agent processes.
+
 Expand the response bar to inspect each model's live answer. Local Ollama and
 loopback or SSH OpenAI-compatible endpoints also show a **Model-emitted
 reasoning** panel when the endpoint sends an explicit reasoning stream. The
